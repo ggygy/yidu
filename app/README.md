@@ -78,10 +78,8 @@ gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/re
 ```
 
 - **自动化(已配)**:`.github/workflows/release.yml`(方案移植自 ai-trainer-platform 实测过的 CI)。Actions 页**手动运行 = 快照预发布**(tag 形如 `v0.1.0-日期-sha`,不被 updater 命中,可随时试跑流水线);**推送 `v*` 标签 = 正式发布**(`--latest`,应用内更新即拉到它)。macOS 双架构(aarch64 + x64,同一 arm64 runner 交叉编译),产物改名 `yidu_*`(GitHub assets 不支持中文),统一在 publish job 汇合后建 Release:dmg ×2 + `.app.tar.gz`+sig ×2 + `latest.json` + `checksums.txt`。
-- **Secrets 状态(2026-11-15,4/7 已配)**:✅ `APPLE_SIGNING_IDENTITY`(`Developer ID Application: zhou wangjun (2VS7ZAN44A)`)、✅ `APPLE_TEAM_ID`(`2VS7ZAN44A`,从证书名提取)、✅ `APPLE_ID`(1820909770@qq.com,若 Apple ID 登录邮箱不是这个请改)、✅ `TAURI_SIGNING_PRIVATE_KEY`。**剩余 2 步**:
-  1. 导出证书:钥匙串访问 → 登录钥匙串 → 证书 → 选「Developer ID Application: zhou wangjun」→ 导出 .p12(设个密码),然后 `base64 -i 证书.p12 | gh secret set APPLE_CERTIFICATE -R ggygy/yidu`;导出密码 → `gh secret set APPLE_CERTIFICATE_PASSWORD -R ggygy/yidu`
-  2. [appleid.apple.com](https://appleid.apple.com) → 登录与安全 → App 专用密码 → 生成,`gh secret set APPLE_PASSWORD -R ggygy/yidu`
-  - 配齐前 CI 自动退化为**未签名构建**(不会失败);配齐后自动 Developer ID 签名+公证,CI 内置 `codesign/spctl/stapler` 校验。
+- **Secrets 状态(2026-11-15,6/7 已配)**:✅ `APPLE_CERTIFICATE`(Developer ID p12 的 base64,自钥匙串新导,含 1 有效身份 Developer ID Application + 1 过期 Apple Development,无害)、✅ `APPLE_CERTIFICATE_PASSWORD`、✅ `APPLE_SIGNING_IDENTITY`(`Developer ID Application: zhou wangjun (2VS7ZAN44A)`)、✅ `APPLE_TEAM_ID`(`2VS7ZAN44A`)、✅ `APPLE_ID`(1820909770@qq.com,若 Apple ID 登录邮箱不是这个请改)、✅ `TAURI_SIGNING_PRIVATE_KEY`。**仅剩 1 步**:[appleid.apple.com](https://appleid.apple.com) → 登录与安全 → App 专用密码 → 生成,`gh secret set APPLE_PASSWORD -R ggygy/yidu`(配齐前勿跑 CI——签名已激活但公证缺凭据会失败)。
+  - 配齐后自动 Developer ID 签名+公证,CI 内置 `codesign/spctl/stapler` 校验;若想临时回退未签名构建,删除 `APPLE_CERTIFICATE` secret 即可。
 - 注意:私有仓的 Release 资产匿名下载 404,updater 检查会失败——对外分发时转公开仓,或自托管 latest.json(改 `plugins.updater.endpoints` 即可);仅自用无妨(手动下载 dmg 安装)。
 
 ## 快捷键

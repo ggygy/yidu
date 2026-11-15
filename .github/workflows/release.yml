@@ -6,15 +6,16 @@
 # + 更新包 .app.tar.gz+sig ×2 + setup.exe.sig + latest.json(三平台条目)+ checksums.txt。
 # 方案移植自 ai-trainer-platform 的 build.yml(实测过正式发版),适配 app/ 目录布局。
 #
-# 所需 Secrets(已配 4/7,见 app/README.md「发布与 CI」):
+# 所需 Secrets(已配 6/7,见 app/README.md「发布与 CI」):
+#   ✅ APPLE_CERTIFICATE             Developer ID p12 的 base64(security export 产,RC2 旧格式,CI 的 security import 可读)
+#   ✅ APPLE_CERTIFICATE_PASSWORD    导出 .p12 的密码
 #   ✅ APPLE_SIGNING_IDENTITY        Developer ID Application: zhou wangjun (2VS7ZAN44A)
 #   ✅ APPLE_TEAM_ID                 2VS7ZAN44A
 #   ✅ APPLE_ID                      公证用 Apple ID 邮箱
 #   ✅ TAURI_SIGNING_PRIVATE_KEY     ~/.tauri/yidu.key 内容(updater 签名)
-#   ⬜ APPLE_CERTIFICATE             证书 .p12 的 base64(待用户从钥匙串导出后设置)
-#   ⬜ APPLE_CERTIFICATE_PASSWORD    导出 .p12 的密码
-#   ⬜ APPLE_PASSWORD                App 专用密码(appleid.apple.com 生成)
-# 未配齐前自动退化为未签名构建,CI 不会失败(SIGNED 条件注入,绝不传空值)。
+#   ⬜ APPLE_PASSWORD                App 专用密码(appleid.apple.com 生成)——最后一项!
+# 注意:SIGNED 由 APPLE_CERTIFICATE 是否存在驱动:无它 = 未签名构建(不会失败);
+# 有它但缺 APPLE_PASSWORD = 签名成功、公证失败。**配齐 APPLE_PASSWORD 前先别跑 CI。**
 
 name: release
 
