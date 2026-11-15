@@ -77,10 +77,11 @@ gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/re
 # 4. 手写 latest.json 上传到同一 Release(参考 tauri 文档字段:version/pubnotes(可省)/platforms.darwin-aarch64.signature/url)
 ```
 
-- **自动化(已配)**:推送 `v*` 标签触发 `.github/workflows/release.yml`(tauri-action)——自动构建 mac arm64、Developer ID 签名、公证、生成更新包+`latest.json`,上传到**草稿 Release**,审核后 publish 即完成发版。`TAURI_SIGNING_PRIVATE_KEY` secret 已配置;其余 Apple secrets 见 workflow 文件头注释,配置一次:
-  1. 钥匙串访问导出「Developer ID Application」证书为 .p12 → `base64 -i cert.p12 | pbcopy` → secret `APPLE_CERTIFICATE`(p12 密码 → `APPLE_CERTIFICATE_PASSWORD`)
-  2. `APPLE_SIGNING_IDENTITY` = 证书常用名(钥匙串里点开看,形如 `Developer ID Application: Your Name (TEAMID)`)
-  3. appleid.apple.com 生成 App 专用密码 → `APPLE_PASSWORD`;Apple ID 邮箱 → `APPLE_ID`;团队 ID → `APPLE_TEAM_ID`
+- **自动化(已配)**:`.github/workflows/release.yml`(方案移植自 ai-trainer-platform 实测过的 CI)。Actions 页**手动运行 = 快照预发布**(tag 形如 `v0.1.0-日期-sha`,不被 updater 命中,可随时试跑流水线);**推送 `v*` 标签 = 正式发布**(`--latest`,应用内更新即拉到它)。macOS 双架构(aarch64 + x64,同一 arm64 runner 交叉编译),产物改名 `yidu_*`(GitHub assets 不支持中文),统一在 publish job 汇合后建 Release:dmg ×2 + `.app.tar.gz`+sig ×2 + `latest.json` + `checksums.txt`。
+- **Secrets 状态(2026-11-15,4/7 已配)**:✅ `APPLE_SIGNING_IDENTITY`(`Developer ID Application: zhou wangjun (2VS7ZAN44A)`)、✅ `APPLE_TEAM_ID`(`2VS7ZAN44A`,从证书名提取)、✅ `APPLE_ID`(1820909770@qq.com,若 Apple ID 登录邮箱不是这个请改)、✅ `TAURI_SIGNING_PRIVATE_KEY`。**剩余 2 步**:
+  1. 导出证书:钥匙串访问 → 登录钥匙串 → 证书 → 选「Developer ID Application: zhou wangjun」→ 导出 .p12(设个密码),然后 `base64 -i 证书.p12 | gh secret set APPLE_CERTIFICATE -R ggygy/yidu`;导出密码 → `gh secret set APPLE_CERTIFICATE_PASSWORD -R ggygy/yidu`
+  2. [appleid.apple.com](https://appleid.apple.com) → 登录与安全 → App 专用密码 → 生成,`gh secret set APPLE_PASSWORD -R ggygy/yidu`
+  - 配齐前 CI 自动退化为**未签名构建**(不会失败);配齐后自动 Developer ID 签名+公证,CI 内置 `codesign/spctl/stapler` 校验。
 - 注意:私有仓的 Release 资产匿名下载 404,updater 检查会失败——对外分发时转公开仓,或自托管 latest.json(改 `plugins.updater.endpoints` 即可);仅自用无妨(手动下载 dmg 安装)。
 
 ## 快捷键

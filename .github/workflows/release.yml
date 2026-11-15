@@ -1,14 +1,19 @@
-# 译读 · macOS Release 构建(签名 + 公证 + 更新包 + latest.json)
-# 触发:推送 v* 标签,或 Actions 页手动运行;产物进草稿 Release,审核后 publish
-# 所需 Secrets(仓库 Settings → Secrets → Actions,配置说明见 app/README.md「发布与 CI」):
-#   APPLE_CERTIFICATE             Developer ID Application 证书 .p12 的 base64
-#   APPLE_CERTIFICATE_PASSWORD    该 .p12 的导出密码
-#   APPLE_SIGNING_IDENTITY        证书常用名,如 "Developer ID Application: NAME (TEAMID)"
-#   APPLE_ID                      公证用 Apple ID 邮箱
-#   APPLE_PASSWORD                App 专用密码(appleid.apple.com 生成)
-#   APPLE_TEAM_ID                 开发者团队 ID(10 位)
-#   TAURI_SIGNING_PRIVATE_KEY     ~/.tauri/yidu.key 内容(updater 签名)
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  私钥密码(本仓库私钥为空,secret 可不设)
+# 译读 · macOS 构建发布(Developer ID 签名 + 公证 + 更新包 + latest.json)
+# 触发:推送 v* 标签 = 正式发布(--latest);Actions 页手动运行 = 快照预发布
+# (预发布不会被 releases/latest/download/latest.json 命中,可安全试跑流水线)。
+# 产物:dmg ×2(aarch64 + x64,配齐 APPLE_* Secrets 时自动签名+公证)
+# + 更新包 .app.tar.gz+sig ×2 + latest.json + checksums.txt。
+# 方案移植自 ai-trainer-platform 的 build.yml(实测过正式发版),适配 app/ 目录布局。
+#
+# 所需 Secrets(已配 4/7,见 app/README.md「发布与 CI」):
+#   ✅ APPLE_SIGNING_IDENTITY        Developer ID Application: zhou wangjun (2VS7ZAN44A)
+#   ✅ APPLE_TEAM_ID                 2VS7ZAN44A
+#   ✅ APPLE_ID                      公证用 Apple ID 邮箱
+#   ✅ TAURI_SIGNING_PRIVATE_KEY     ~/.tauri/yidu.key 内容(updater 签名)
+#   ⬜ APPLE_CERTIFICATE             证书 .p12 的 base64(待用户从钥匙串导出后设置)
+#   ⬜ APPLE_CERTIFICATE_PASSWORD    导出 .p12 的密码
+#   ⬜ APPLE_PASSWORD                App 专用密码(appleid.apple.com 生成)
+# 未配齐前自动退化为未签名构建,CI 不会失败(SIGNED 条件注入,绝不传空值)。
 
 name: release
 
@@ -20,45 +25,212 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # macOS 双架构:同一台 arm64 runner 原生编 aarch64、交叉编 x64。
+  # 指定 --target 后产物在 app/src-tauri/target/<triple>/release/bundle/,两架构互不覆盖。
   build-macos:
     runs-on: macos-latest # arm64
+    strategy:
+      # 一条腿失败另一条继续跑完,publish 要求两条都成功
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            arch: x64
+    outputs:
+      signed: ${{ steps.sign_flag.outputs.signed }}
+    env:
+      # tauri-bundler 只要检测到 APPLE_* 环境变量存在(哪怕为空)就会走签名路径,
+      # 未配齐 Secrets 时绝不能注入空变量(否则 security import 空证书直接失败)
+      SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - name: Install frontend deps
-        run: npm ci
-        working-directory: app
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/src-tauri -> Cargo.lock
+          # 缓存按目标三元组隔离,避免两架构 target/ 互相污染
+          key: ${{ matrix.target }}
 
-      - name: Build, sign, notarize and upload to draft release
-        uses: tauri-apps/tauri-action@v0
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: app
+
+      # beforeBuildCommand 会先跑 npm run build(tsc 严格检查),前端类型错误即失败
+      - name: 构建 Tauri 应用(签名+公证)
+        if: env.SIGNED == 'true'
+        run: npm run tauri build -- --target ${{ matrix.target }}
+        working-directory: app
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS 签名 + 公证
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # 更新包签名(软件内更新校验)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: 构建 Tauri 应用
+        if: env.SIGNED != 'true'
+        run: npm run tauri build -- --target ${{ matrix.target }}
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: 校验签名与公证
+        if: env.SIGNED == 'true'
+        run: |
+          # tauri-bundler 打完 dmg 会删 bundle/macos/ 下的 .app,只能挂 dmg 校验
+          DMG=$(ls app/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          echo "== 校验 dmg 签名: $DMG"
+          codesign --verify --strict "$DMG"
+          MNT="$(mktemp -d)/dmg"
+          mkdir "$MNT"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          APP="$(find "$MNT" -maxdepth 1 -name '*.app' -print -quit)"
+          echo "== 校验 app: $APP"
+          codesign --verify --deep --strict "$APP"
+          codesign -dv "$APP" 2>&1 | grep -E "Authority|TeamIdentifier" || true
+          spctl -a -t exec -vv "$APP"
+          stapler validate "$APP"
+          hdiutil detach "$MNT"
+
+      # GitHub assets 不支持非 ASCII 名(productName 是「译读」),统一改名 yidu_*
+      - name: 规范化安装包文件名
+        run: |
+          mkdir -p release
+          VER=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          BUNDLE=app/src-tauri/target/${{ matrix.target }}/release/bundle
+          cp "$BUNDLE"/dmg/*.dmg "release/yidu_${VER}_${{ matrix.arch }}.dmg"
+          # 应用内更新产物(updater 下载的就是这个 tar.gz,sig 内嵌进 latest.json)
+          cp "$BUNDLE"/macos/*.app.tar.gz "release/yidu_${VER}_${{ matrix.arch }}.app.tar.gz"
+          cp "$BUNDLE"/macos/*.app.tar.gz.sig "release/yidu_${VER}_${{ matrix.arch }}.app.tar.gz.sig"
+
+      - name: 记录签名状态
+        id: sign_flag
+        run: echo "signed=$SIGNED" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
         with:
-          projectPath: app
-          tagName: v__VERSION__ # 取 tauri.conf.json 的 version
-          releaseName: "译读 v__VERSION__"
-          releaseBody: "见「关于与更新」检查更新;macOS arm64。"
-          releaseDraft: true
-          prerelease: false
-          includeUpdaterJson: true # 生成并上传 latest.json(updater endpoint 指向它)
+          name: mac-dist-${{ matrix.arch }}
+          path: release/
+          retention-days: 3
+
+  # 集中在 publish:两条架构腿都成功、产物经 artifacts 汇合后才创建 Release,
+  # 避免单腿构建被取消时留下半成品 Release
+  publish:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    env:
+      # tag push = 正式发布;手动运行(github.ref 非 tag)= 快照预发布
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+      SIGNED: ${{ needs.build-macos.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 更新说明取「上个正式 tag 以来的提交」,需要完整历史与 tags
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-dist-aarch64
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-dist-x64
+          path: dist
+
+      - name: 计算发布标签(正式 tag 优先,否则快照 版本-日期-短SHA)
+        id: tag
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          else
+            V=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+            echo "tag=v$V-$(date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 双架构产物在 publish 汇合后统一生成,避免各自生成同名冲突
+      - name: 生成全平台校验清单 checksums.txt
+        run: cd dist && sha256sum *.dmg *.app.tar.gz > checksums.txt
+
+      - name: 生成应用内更新清单 latest.json
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          VER=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          ARM_SIG=$(cat "dist/yidu_${VER}_aarch64.app.tar.gz.sig")
+          X64_SIG=$(cat "dist/yidu_${VER}_x64.app.tar.gz.sig")
+          # 更新说明 = 上个正式 tag 以来的提交,用户在应用内更新弹窗里看到
+          PREV=$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$TAG" | sort -rV | head -1 || true)
+          if [ -n "$PREV" ]; then
+            NOTES=$(git log --oneline --no-merges "$PREV..HEAD" | head -40)
+          else
+            NOTES=$(git log --oneline --no-merges -20 | head -40)
+          fi
+          [ -n "$NOTES" ] || NOTES="版本 $TAG"
+          echo "== 更新说明($PREV → $TAG)"; echo "$NOTES"
+          node -e '
+            const fs = require("fs");
+            const [ver, tag, armSig, x64Sig, notes] = process.argv.slice(1);
+            const base = `https://github.com/ggygy/yidu/releases/download/${tag}`;
+            fs.writeFileSync("dist/latest.json", JSON.stringify({
+              version: ver,
+              notes,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "darwin-aarch64": { signature: armSig, url: `${base}/yidu_${ver}_aarch64.app.tar.gz` },
+                "darwin-x86_64": { signature: x64Sig, url: `${base}/yidu_${ver}_x64.app.tar.gz` },
+              },
+            }, null, 2) + "\n");
+            console.log("latest.json 已生成");
+          ' "$VER" "$TAG" "$ARM_SIG" "$X64_SIG" "$NOTES"
+
+      - name: 创建 Release 并上传全部产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            if [ "$SIGNED" = "true" ]; then
+              echo "- macOS 包已签名并公证(Developer ID),下载即开;若首次弹「已下载」提示,右键 → 打开一次即可"
+            else
+              echo "- macOS 首次打开:未做苹果签名/公证,Gatekeeper 会提示「已损坏」。拖入「应用程序」后终端执行一次:"
+              echo '  `xattr -cr "/Applications/译读.app"`(新版 macOS「右键 → 打开」已无效)'
+            fi
+            echo "- Apple Silicon(M 系列)用 \`_aarch64.dmg\`,Intel 芯片用 \`_x64.dmg\`(终端 uname -m:arm64 → aarch64,x86_64 → x64)"
+            echo '- 完整性校验:`shasum -a 256 -c checksums.txt`'
+            echo '- 应用内更新:设置 → 「关于与更新」可自动下载安装新版本'
+          } > release-notes.md
+          # 正式发布标 --latest(updater 的 releases/latest/download/latest.json 只命中它);
+          # 快照 --prerelease,不会被 latest 解析命中,可安全试跑
+          if [ -n "$RELEASE_TAG" ]; then
+            gh release view "$TAG" >/dev/null 2>&1 || \
+              gh release create "$TAG" --latest --title "译读 $TAG" --notes-file release-notes.md
+          else
+            gh release view "$TAG" >/dev/null 2>&1 || \
+              gh release create "$TAG" --prerelease --title "译读 $TAG(快照)" --notes-file release-notes.md
+          fi
+          gh release upload "$TAG" dist/* --clobber
