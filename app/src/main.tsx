@@ -458,8 +458,8 @@ function SettingsPanel({
     <>
       <div className="absolute inset-0 bg-scrim z-40 [animation:fadein_0.18s]" onClick={onClose} />
       <aside className="absolute right-0 top-0 bottom-0 w-[420px] max-w-[92vw] bg-surface border-l border-line shadow-[var(--shadow-card)] z-50 flex flex-col gap-3.5 px-[18px] pt-[18px] pb-3.5 overflow-y-auto [animation:slidein-r_0.2s_ease]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center">
-          <b className="text-base font-semibold">设置</b>
+        <div className="flex items-center" data-tauri-drag-region>
+          <b className="text-base font-semibold" data-tauri-drag-region>设置</b>
           <button className="ml-auto w-[34px] h-[34px] rounded-[9px] text-t3 hover:bg-surface2 hover:text-t1 flex items-center justify-center cursor-pointer" onClick={onClose}><Icon n="x" size={15} /></button>
         </div>
         <div className="h-px bg-line" />
@@ -685,9 +685,9 @@ function SidePanel({ title, count, onClose, children, foot }: { title: string; c
     <>
       <div className="absolute inset-0 bg-scrim z-40 [animation:fadein_0.18s]" onClick={onClose} />
       <aside className="absolute left-[18px] top-3.5 bottom-3.5 w-[336px] bg-surface border border-line rounded-2xl shadow-[var(--shadow-card)] z-50 flex flex-col gap-3 px-3.5 pt-4 pb-3 [animation:slidein-l_0.2s_ease]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2">
-          <b className="text-[15px] font-semibold">{title}</b><span className="text-[11px] text-t3">{count}</span>
-          <span className="flex-1" />
+        <div className="flex items-center gap-2" data-tauri-drag-region>
+          <b className="text-[15px] font-semibold" data-tauri-drag-region>{title}</b><span className="text-[11px] text-t3" data-tauri-drag-region>{count}</span>
+          <span className="flex-1" data-tauri-drag-region />
           <button className="w-7 h-7 rounded-lg text-t3 hover:bg-surface2 hover:text-t1 flex items-center justify-center cursor-pointer" onClick={onClose}><Icon n="x" size={14} /></button>
         </div>
         {children}
