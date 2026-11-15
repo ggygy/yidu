@@ -59,8 +59,8 @@ kbd { font-family: var(--f-ui); font-size: 11px; color: var(--t2); background: v
 .icon-btn:hover { background: var(--surface-2); color: var(--t1); }
 .icon-btn.on { color: var(--accent); background: var(--accent-soft); }
 
-.content { position: absolute; inset: 60px 0 0 0; overflow-y: auto; padding: 22px 24px 170px; }
-.col { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.content { position: absolute; inset: 60px 0 0 0; overflow-y: auto; padding: 22px 24px 170px; background: var(--reader-bg, transparent); color: var(--reader-t1, var(--t1)); }
+.col { max-width: var(--reader-w, 720px); margin: 0 auto; display: flex; flex-direction: column; gap: var(--reader-gap, 10px); }
 .doc-head { text-align: center; padding: 6px 0 0; }
 .doc-head h1 { font-family: var(--f-title); font-size: 25px; font-weight: 600; letter-spacing: 0.2px; }
 .doc-head .meta { font-size: 11.5px; color: var(--t3); margin-top: 6px; display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
@@ -70,7 +70,7 @@ kbd { font-family: var(--f-ui); font-size: 11px; color: var(--t2); background: v
 .en { font-size: 12.5px; color: var(--t3); line-height: 1.6; }
 .en .w { cursor: pointer; border-bottom: 1px dotted transparent; transition: color 0.12s; }
 .en .w:hover { border-bottom-color: var(--accent); color: var(--t1); }
-.zh { font-size: 16px; line-height: 1.8; font-family: var(--f-title); color: var(--t1); }
+.zh { font-size: var(--zh-size, 16px); line-height: var(--zh-line, 1.8); font-family: var(--zh-font, var(--f-title)); color: var(--t1); }
 .zh.streaming { opacity: 0.55; }
 .term-chip-row { display: flex; gap: 6px; align-items: center; }
 .chip { font-size: 10px; padding: 2px 8px; border-radius: 6px; }
@@ -225,7 +225,7 @@ kbd { font-family: var(--f-ui); font-size: 11px; color: var(--t2); background: v
 .set-head b { font-size: 16px; font-weight: 600; }
 .set-head .icon-btn { margin-left: auto; }
 .set-div { height: 1px; background: var(--border); }
-.set-sec { display: flex; flex-direction: column; gap: 8px; }
+.set-sec { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
 .set-label { font-size: 10.5px; font-weight: 600; letter-spacing: 1px; color: var(--t3); }
 .set-rows { display: flex; flex-direction: column; gap: 6px; }
 .set-row { display: flex; align-items: center; justify-content: space-between; background: var(--surface-2); border-radius: 10px; padding: 7px 12px; min-height: 38px; }
@@ -358,6 +358,20 @@ kbd { font-family: var(--f-ui); font-size: 11px; color: var(--t2); background: v
 .term-pop .ops { display: flex; gap: 8px; margin-top: 9px; }
 .term-pop .ops button { font-size: 11px; border: 1px solid var(--border); background: none; color: var(--t2); border-radius: 7px; padding: 3px 10px; cursor: pointer; }
 .term-pop .ops button:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---- 阅读外观自定义(设置面板) ---- */
+.rs-reset { float: right; font-size: 10px; font-weight: 400; color: var(--t3); cursor: pointer; }
+.rs-reset:hover { color: var(--accent); }
+.rs-themes, .rs-fonts, .rs-accents { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.rs-swatch { width: 22px; height: 22px; border-radius: 7px; border: 1px solid var(--border); cursor: pointer; padding: 0; }
+.rs-swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rs-color { width: 22px; height: 22px; border: none; background: none; cursor: pointer; padding: 0; }
+.rs-opt { font: 400 11px var(--f-ui); color: var(--t2); background: var(--surface-2); border: none; border-radius: 7px; padding: 3px 9px; cursor: pointer; }
+.rs-opt.on { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.rs-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border); cursor: pointer; padding: 0; }
+.rs-dot.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rs-range { flex: 1; max-width: 150px; accent-color: var(--accent); height: 3px; cursor: pointer; }
+.set-row .name b { color: var(--accent); font-weight: 600; margin-left: 3px; }
 
 /* ---- 更新检查(设置面板) ---- */
 .upd-row { display: flex; align-items: center; gap: 10px; }

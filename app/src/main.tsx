@@ -31,6 +31,60 @@ function fmtTokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
 }
 
+// ---------- 阅读外观自定义(localStorage 持久化,即时注入 CSS 变量) ----------
+
+type ReaderTheme = "default" | "sepia" | "oled" | "custom";
+type ReaderFont = "serif" | "sans" | "kai" | "mono";
+type ReaderStyle = {
+  theme: ReaderTheme;
+  customBg: string; // theme=custom 时的阅读区背景色
+  font: ReaderFont;
+  size: number;   // 译文字号 px
+  lineH: number;  // 译文行高
+  gap: number;    // 块间距 px
+  width: number;  // 内容宽度 px
+  accent: string; // "" = 跟随主题默认
+};
+
+const RS_FONTS: Record<ReaderFont, string> = {
+  serif: '"Source Serif 4", Georgia, "Noto Serif SC", "Songti SC", serif',
+  sans: '-apple-system, "Inter", "Noto Sans SC", "PingFang SC", sans-serif',
+  kai: '"Kaiti SC", "STKaiti", "Kaiti", serif',
+  mono: '"JetBrains Mono", "SF Mono", Menlo, monospace',
+};
+const RS_ACCENTS = ["", "#8b5cf6", "#10b981", "#f59e0b", "#ec4899"];
+const RS_DEFAULT: ReaderStyle = { theme: "default", customBg: "#f5f0e6", font: "serif", size: 16, lineH: 1.8, gap: 10, width: 720, accent: "" };
+
+// 十六进制亮度(0~1),custom 深底自动配浅字
+function hexLuminance(hex: string): number {
+  const m = hex.replace("#", "");
+  if (m.length < 6) return 1;
+  const r = parseInt(m.slice(0, 2), 16) / 255, g = parseInt(m.slice(2, 4), 16) / 255, b = parseInt(m.slice(4, 6), 16) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function applyReaderStyle(rs: ReaderStyle) {
+  const r = document.documentElement.style;
+  r.setProperty("--zh-size", `${rs.size}px`);
+  r.setProperty("--zh-line", String(rs.lineH));
+  r.setProperty("--zh-font", RS_FONTS[rs.font]);
+  r.setProperty("--reader-gap", `${rs.gap}px`);
+  r.setProperty("--reader-w", `${rs.width}px`);
+  if (rs.accent) r.setProperty("--accent", rs.accent); else r.removeProperty("--accent");
+  r.removeProperty("--reader-bg"); r.removeProperty("--reader-t1");
+  if (rs.theme === "sepia") { r.setProperty("--reader-bg", "#f3ecd9"); r.setProperty("--reader-t1", "#3b3226"); }
+  else if (rs.theme === "oled") { r.setProperty("--reader-bg", "#000000"); r.setProperty("--reader-t1", "#e8e8ea"); }
+  else if (rs.theme === "custom") {
+    r.setProperty("--reader-bg", rs.customBg);
+    if (hexLuminance(rs.customBg) < 0.35) r.setProperty("--reader-t1", "#e8e8ea");
+  }
+  localStorage.setItem("yidu-reader", JSON.stringify(rs));
+}
+
+function loadReaderStyle(): ReaderStyle {
+  try { return { ...RS_DEFAULT, ...JSON.parse(localStorage.getItem("yidu-reader") || "{}") }; } catch { return RS_DEFAULT; }
+}
+
 const SOURCE_LABEL: Record<string, string> = {
   youdao: "有道词典(免费)",
   dictapi: "dictionaryapi.dev(免费)",
@@ -153,7 +207,7 @@ const PRESETS: Record<string, { kind: string; base_url: string; model: string }>
 };
 
 function SettingsPanel({
-  onClose, prefs, applyPrefs, dark, setDark, providers, refreshProviders, say,
+  onClose, prefs, applyPrefs, dark, setDark, providers, refreshProviders, say, rs, setRs,
 }: {
   onClose: () => void;
   prefs: Prefs | null;
@@ -163,6 +217,8 @@ function SettingsPanel({
   providers: Provider[];
   refreshProviders: () => void;
   say: (m: string) => void;
+  rs: ReaderStyle;
+  setRs: (v: ReaderStyle) => void;
 }) {
   const active = providers.find((p) => p.is_active);
   const [selId, setSelId] = useState<number | null>(active?.id ?? providers[0]?.id ?? null);
@@ -361,6 +417,49 @@ function SettingsPanel({
         </div>
 
         <div className="set-sec">
+          <span className="set-label">阅读外观<span className="rs-reset" onClick={() => setRs(RS_DEFAULT)}>恢复默认</span></span>
+          <div className="set-rows">
+            <div className="set-row"><span className="name">阅读背景</span>
+              <span className="val rs-themes">
+                {([["default", "跟随主题"], ["sepia", "#f3ecd9"], ["oled", "#000000"], ["custom", rs.customBg]] as const).map(([k, v]) => (
+                  <button key={k} title={k === "default" ? "跟随主题" : k === "custom" ? "自定义" : k === "sepia" ? "护眼米黄" : "OLED 纯黑"}
+                    className={"rs-swatch" + (rs.theme === k ? " on" : "")} style={{ background: k === "default" ? "var(--bg)" : v }}
+                    onClick={() => setRs({ ...rs, theme: k })} />
+                ))}
+                {rs.theme === "custom" && <input type="color" className="rs-color" value={rs.customBg} onChange={(e) => setRs({ ...rs, customBg: e.target.value })} />}
+              </span>
+            </div>
+            <div className="set-row"><span className="name">正文字体</span>
+              <span className="val rs-fonts">
+                {([["serif", "衬线"], ["sans", "无衬线"], ["kai", "楷体"], ["mono", "等宽"]] as const).map(([k, label]) => (
+                  <button key={k} className={"rs-opt" + (rs.font === k ? " on" : "")} onClick={() => setRs({ ...rs, font: k })}>{label}</button>
+                ))}
+              </span>
+            </div>
+            <div className="set-row"><span className="name">字号 <b>{rs.size}px</b></span>
+              <input className="rs-range" type="range" min={14} max={20} step={1} value={rs.size} onChange={(e) => setRs({ ...rs, size: Number(e.target.value) })} />
+            </div>
+            <div className="set-row"><span className="name">行距 <b>{rs.lineH.toFixed(1)}</b></span>
+              <input className="rs-range" type="range" min={1.5} max={2.2} step={0.1} value={rs.lineH} onChange={(e) => setRs({ ...rs, lineH: Number(e.target.value) })} />
+            </div>
+            <div className="set-row"><span className="name">段间距 <b>{rs.gap}px</b></span>
+              <input className="rs-range" type="range" min={4} max={24} step={1} value={rs.gap} onChange={(e) => setRs({ ...rs, gap: Number(e.target.value) })} />
+            </div>
+            <div className="set-row"><span className="name">页宽 <b>{rs.width}px</b></span>
+              <input className="rs-range" type="range" min={640} max={1000} step={20} value={rs.width} onChange={(e) => setRs({ ...rs, width: Number(e.target.value) })} />
+            </div>
+            <div className="set-row"><span className="name">强调色</span>
+              <span className="val rs-accents">
+                {RS_ACCENTS.map((c) => (
+                  <button key={c || "default"} title={c || "默认"} className={"rs-dot" + (rs.accent === c ? " on" : "")}
+                    style={{ background: c || "var(--accent)" }} onClick={() => setRs({ ...rs, accent: c })} />
+                ))}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="set-sec">
           <span className="set-label">外观与用量</span>
           <div className="set-rows">
             <div className="set-row"><span className="name">深色外观</span><Toggle on={dark} onClick={() => setDark(!dark)} /></div>
@@ -509,6 +608,9 @@ function App() {
   const [setOpen, setSetOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [dark, setDark] = useLocalFlag("v3-dark", false);
+  const [rs, setRs] = useState<ReaderStyle>(loadReaderStyle); // 阅读外观自定义
+
+  useEffect(() => { applyReaderStyle(rs); }, [rs]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [prefs, setPrefsState] = useState<Prefs | null>(null);
   const [direction, setDirection] = useState("en2zh");
@@ -1065,6 +1167,8 @@ function App() {
           providers={providers}
           refreshProviders={refreshProviders}
           say={say}
+          rs={rs}
+          setRs={setRs}
         />
       )}
 
