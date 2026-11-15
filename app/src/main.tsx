@@ -10,7 +10,7 @@ import * as api from "./api";
 import type { Article, Block, DictCard, GlossaryItem, Prefs, Provider, StreamEvent, UsageSummary, VocabEntry } from "./types";
 import "./styles.css";
 
-type View = "interleave" | "split" | "zh";
+type View = "interleave" | "split" | "zh" | "pure";
 type Panel = "library" | "vocab" | "glossary" | null;
 
 function useLocalFlag(key: string, init: boolean) {
@@ -499,6 +499,7 @@ function App() {
   const [vocab, setVocab] = useState<{ word: string; x: number; y: number; sentence?: string } | null>(null);
   const [vocabCount, setVocabCount] = useState(0);
   const [glossaryCount, setGlossaryCount] = useState(0);
+  const [glossary, setGlossary] = useState<GlossaryItem[]>([]); // 术语表(译文高亮用)
   const [articles, setArticles] = useState<Article[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -540,7 +541,8 @@ function App() {
     api.getPrefs().then((p) => { setPrefsState(p); setDirection(p.direction); }).catch(() => {});
     api.vocabList().then((v) => setVocabCount(v.length)).catch(() => {});
     // 启动静默检查更新:有新版仅 toast 提示,不自动安装(在设置面板操作)
-    checkUpdateFn().then((u) => { if (u) say(`发现新版本 v${u.version} · ⌘, 打开设置更新`); }).catch(() => {});    api.glossaryList().then((g) => setGlossaryCount(g.length)).catch(() => {});
+    checkUpdateFn().then((u) => { if (u) say(`发现新版本 v${u.version} · ⌘, 打开设置更新`); }).catch(() => {});
+    api.glossaryList().then((g) => { setGlossaryCount(g.length); setGlossary(g); }).catch(() => {});
   }, []);
 
   // 首启引导:无任何 provider 时自动打开设置
@@ -580,6 +582,13 @@ function App() {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+      // 输入控件聚焦时不响应全局快捷键(数字键切视图等)
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (!mod && !typing && ["1", "2", "3", "4"].includes(e.key)) {
+        setView((["interleave", "split", "zh", "pure"] as const)[Number(e.key) - 1]);
+        return;
+      }
       if (mod && e.key.toLowerCase() === "n") { e.preventDefault(); setComposing(true); }
       if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); setPanel((p) => (p === "library" ? null : "library")); }
       if (mod && e.key.toLowerCase() === "r") { e.preventDefault(); resumeRef.current(); }
@@ -707,12 +716,14 @@ function App() {
   const jumpTo = (idx: number) =>
     document.querySelector(`[data-bidx="${idx}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  // 术语弹卡「停用」:按 from/to 在术语库中定位并禁用
+  // 术语弹卡「停用」:按 from/to 在术语库中定位并禁用,刷新高亮
   const disableTerm = async (hit: TermHit) => {
     try {
       const items = await api.glossaryList();
       const g = items.find((it) => it.term === hit.from || it.translation === hit.to);
       if (g) { await api.glossarySetEnabled(g.id, false); say(`已停用术语 ${g.term}(下次翻译起生效)`); }
+      const fresh = await api.glossaryList();
+      setGlossary(fresh); setGlossaryCount(fresh.length);
       setTermPop(null);
     } catch (e) { say(String(e)); }
   };
@@ -720,17 +731,28 @@ function App() {
   const En = ({ text }: { text: string }) => (
     <div className="en md"><Md text={text} onWord={(w, x, y) => setVocab({ word: w, x, y, sentence: text })} /></div>
   );
-  const Zh = ({ b }: { b: Block }) => {
-    let hits: TermHit[] = [];
-    try { hits = b.terms ? JSON.parse(b.terms) : []; } catch { /* ignore */ }
-    return b.trans ? (
+  // 术语高亮来源 = 全部启用术语(不限于本块命中):术语表生效情况直接可见,点击弹卡
+  const glossaryHits: TermHit[] = useMemo(
+    () => glossary.filter((g) => g.enabled).map((g) => ({ from: g.term, to: g.translation })),
+    [glossary],
+  );
+
+  const Zh = ({ b }: { b: Block }) =>
+    b.trans ? (
       <div className={"zh md" + (b.status === "streaming" ? " streaming" : "")}>
-        <Md text={b.trans} termHits={hits.length ? hits : undefined} onTerm={(t, x, y) => setTermPop({ hit: t, x, y })} />
+        <Md text={b.trans} termHits={glossaryHits.length ? glossaryHits : undefined} onTerm={(t, x, y) => setTermPop({ hit: t, x, y })} />
       </div>
     ) : (
       <p className={"zh" + (b.status === "streaming" ? " streaming" : "")}>{b.status === "streaming" ? "…" : "待译"}</p>
     );
-  };
+
+  // 纯净模式静态渲染:无点词/术语交互,文本可自由选择复制
+  const ZhPlain = ({ b }: { b: Block }) =>
+    b.trans ? (
+      <div className={"zh md" + (b.status === "streaming" ? " streaming" : "")}><Md text={b.trans} /></div>
+    ) : (
+      <p className={"zh" + (b.status === "streaming" ? " streaming" : "")}>{b.status === "streaming" ? "…" : "待译"}</p>
+    );
   const TermChips = ({ b }: { b: Block }) => {
     let hits: { from: string; to: string }[] = [];
     try { hits = b.terms ? JSON.parse(b.terms) : []; } catch { /* ignore */ }
@@ -859,6 +881,19 @@ function App() {
               </div>
             ),
           )}
+
+          {/* 纯净模式:纯译文静态渲染,无点词/术语/chip 交互,文本自由选择复制 */}
+          {doc && view === "pure" && (
+            <div className="pure">
+              {blocks.map((b) =>
+                b.kind === "code" ? (
+                  <CodeBox key={b.idx} src={b.src} />
+                ) : (
+                  <div key={b.idx} data-bidx={b.idx} className="pure-pair"><ZhPlain b={b} /></div>
+                ),
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -868,6 +903,7 @@ function App() {
           <button title="双语对照" className={view === "interleave" ? "on" : ""} onClick={() => setView("interleave")}><Icon n="rows" size={17} /></button>
           <button title="分栏" className={view === "split" ? "on" : ""} onClick={() => setView("split")}><Icon n="cols" size={17} /></button>
           <button title="纯译文" className={view === "zh" ? "on" : ""} onClick={() => setView("zh")}><Icon n="lines" size={17} /></button>
+          <button title="纯净模式(自由复制)" className={view === "pure" ? "on" : ""} onClick={() => setView("pure")}><Icon n="eye" size={17} /></button>
         </div>
         <i className="cap-sep" />
         <button className="stat-btn" onClick={() => setPanel("glossary")} title="术语库管理">
@@ -886,8 +922,8 @@ function App() {
       </div>
       <div className="capsule-hint">点英文单词查词收藏 · ⌘N 新建 · ⌘R 续译 · ⌥T 快捷窗</div>
 
-      {/* TOC 目录侧轨:≥3 个标题才出现,hover 展开 */}
-      {doc && toc.length >= 3 && (
+      {/* TOC 目录侧轨:≥3 个标题才出现,hover 展开;纯净模式隐藏 */}
+      {doc && toc.length >= 3 && view !== "pure" && (
         <nav className="toc-rail">
           <div className="toc-list">
             <span className="toc-hint">目录</span>

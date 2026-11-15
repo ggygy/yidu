@@ -21,6 +21,8 @@ function WordText({ text, onWord }: { text: string; onWord?: WordHandler }) {
             className="w"
             onClick={(e) => {
               if (!onWord) return;
+              const sel = window.getSelection();
+              if (sel && sel.toString()) return; // 拖选文本时不弹查词卡
               e.stopPropagation();
               const clean = tok.replace(/[^A-Za-z-]/g, "").toLowerCase();
               if (clean.length > 1) onWord(clean, e.clientX, e.clientY);
@@ -50,7 +52,12 @@ function TermText({ text, hits, onTerm }: { text: string; hits: TermHit[]; onTer
         const hit = hits.find((h) => h.to === seg);
         if (!hit) return <span key={i}>{seg}</span>;
         return (
-          <span key={i} className="tm" onClick={(e) => { e.stopPropagation(); onTerm(hit, e.clientX, e.clientY); }}>
+          <span key={i} className="tm" onClick={(e) => {
+            const sel = window.getSelection();
+            if (sel && sel.toString()) return; // 拖选文本时不弹术语卡
+            e.stopPropagation();
+            onTerm(hit, e.clientX, e.clientY);
+          }}>
             {seg}
           </span>
         );
