@@ -25,9 +25,10 @@ const P: Record<string, string> = {
   volume: "M11 5 6 9H2v6h4l5 4z|M15.5 8.5a5 5 0 0 1 0 7",
   moon: "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z",
   search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z|m21 21-4.3-4.3",
+  loader: "M21 12a9 9 0 1 1-6.219-8.56",
 };
 
-export function Icon({ n, size = 16 }: { n: string; size?: number }) {
+export function Icon({ n, size = 16, className }: { n: string; size?: number; className?: string }) {
   return (
     <svg
       width={size}
@@ -38,7 +39,7 @@ export function Icon({ n, size = 16 }: { n: string; size?: number }) {
       strokeWidth={1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={"ic ic-" + n}
+      className={"ic ic-" + n + (className ? " " + className : "")}
       aria-hidden
     >
       {P[n].split("|").map((d, i) => (

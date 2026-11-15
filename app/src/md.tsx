@@ -100,15 +100,20 @@ export function CodeBox({ src }: { src: string }) {
     try { await navigator.clipboard.writeText(body); setCopied(true); window.setTimeout(() => setCopied(false), 1200); } catch {}
   };
   return (
-    <div className="codebox">
-      <div className="badge-row">
-        <span className="badge">代码块 · 不翻译</span>
-        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span className="lang">{lang}</span>
-          <button className="copy-btn" onClick={copy}>{copied ? "✓ 已复制" : "复制"}</button>
+    <div className="overflow-hidden rounded-xl border border-line bg-codebg px-4 py-3.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="rounded-md bg-white/8 px-2 py-0.5 text-[10px] text-codetx">代码块 · 不翻译</span>
+        <span className="flex items-center gap-2">
+          <span className="font-code text-[10px] text-codedim">{lang}</span>
+          <button
+            className="cursor-pointer rounded-md border border-white/14 px-2.5 py-0.5 font-ui text-[10px] text-codedim hover:border-white/30 hover:text-codetx"
+            onClick={copy}
+          >
+            {copied ? "✓ 已复制" : "复制"}
+          </button>
         </span>
       </div>
-      <pre>{body}</pre>
+      <pre className="overflow-x-auto font-code text-xs leading-relaxed text-codetx">{body}</pre>
     </div>
   );
 }
