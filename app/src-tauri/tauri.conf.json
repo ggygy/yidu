@@ -36,11 +36,20 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/ggygy/yidu/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwNzM5QjMzMTczRDVDMUUKUldRZVhEMFhNNXR6a0hzTm5URFBBNnNZR0ZEd0Fsd1N0VmlkeVJ4YVlvbm5IUlJkZ09Wb3NjR2IK"
+    }
   }
 }

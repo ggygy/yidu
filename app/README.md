@@ -62,6 +62,24 @@ npx tsc --noEmit               # 前端类型检查
 - 应用图标:`node scripts/make-icon.mjs && npx tauri icon app-icon.png`。
 - 长时间自动化验证时建议 `caffeinate -dis` 防锁屏中断。
 
+## 软件内更新与发布流程
+
+- **机制**:tauri-plugin-updater + minisign 签名;endpoint 指向 GitHub Releases(`ggygy/yidu`)的 `latest.json`;安装后 relaunch(process 插件)。启动时静默检查(有新版仅 toast),设置面板「关于与更新」可手动 检查→下载→安装→重启。
+- **密钥**:私钥在 `~/.tauri/yidu.key`(权限 600,空密码,**绝不入库,丢失即无法再发更新**);公钥已写入 `tauri.conf.json` 的 `plugins.updater.pubkey`。生产建议换带密码的密钥并妥善保管。
+- **发版步骤**:
+
+```bash
+# 1. 升版本号(tauri.conf.json 的 version)
+# 2. 带签名构建(产物在 target/release/bundle/macos/)
+TAURI_SIGNING_PRIVATE_KEY=~/.tauri/yidu.key npm run tauri build
+# 3. 建 Release 并上传(gh):
+gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/release/bundle/macos/译读.app.tar.gz.sig
+# 4. 手写 latest.json 上传到同一 Release(参考 tauri 文档字段:version/pubnotes(可省)/platforms.darwin-aarch64.signature/url)
+```
+
+- **自动化(可选)**:仓库加 tauri-action workflow 后,打 tag 即自动构建+签名+生成 latest.json 发 Release。
+- 注意:私有仓的 Release 资产需要登录才能下载,对外分发时应转公开仓或自托管 latest.json(改 `plugins.updater.endpoints` 即可)。
+
 ## 快捷键
 
 主窗:⌘N 新建 · ⌘K 文章库 · ⌘R 续译 · ⌘L 亮暗 · ⌘, 设置 · Esc 关层;快捷窗:⌥T 唤出(可改)· ⌘D 对照 · ⌘↩ 翻译 · Esc 取消。

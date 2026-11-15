@@ -1,6 +1,9 @@
 import { createRoot } from "react-dom/client";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
+import { check as checkUpdateFn } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { CodeBox, Md, type TermHit, type WordHandler } from "./md";
 import { Icon } from "./icons";
 import * as api from "./api";
@@ -172,6 +175,36 @@ function SettingsPanel({
   const [testMsg, setTestMsg] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [price, setPrice] = useState(String(prefs?.price_per_mtok ?? ""));
+  const [appVersion, setAppVersion] = useState("");
+  const [updBusy, setUpdBusy] = useState(false);
+  const [updMsg, setUpdMsg] = useState<string | null>(null);
+
+  useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
+
+  // 检查更新:有新版本 → 下载 → 安装 → 重启;失败/无更新给出文案
+  const checkUpdate = async () => {
+    if (updBusy) return;
+    setUpdBusy(true); setUpdMsg(null);
+    try {
+      const upd = await checkUpdateFn();
+      if (!upd) { setUpdMsg("已是最新版本"); return; }
+      setUpdMsg(`发现 v${upd.version},下载中…`);
+      let received = 0;
+      let total = 0;
+      await upd.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started": total = event.data.contentLength ?? 0; break;
+          case "Progress": received += event.data.chunkLength; setUpdMsg(`下载中 ${total ? Math.round((received / total) * 100) + "%" : (received >> 10) + "KB"}`); break;
+          case "Finished": setUpdMsg("下载完成,即将重启…"); break;
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      setUpdMsg(`检查失败:${String(e).slice(0, 80)}`);
+    } finally {
+      setUpdBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (sel) { setName(sel.name); setBaseUrl(sel.base_url); setModel(sel.model); }
@@ -343,8 +376,21 @@ function SettingsPanel({
           </div>
         </div>
 
+        <div className="set-sec">
+          <span className="set-label">关于与更新</span>
+          <div className="set-rows">
+            <div className="set-row"><span className="name">当前版本</span><span className="val"><span className="plain">{appVersion}</span></span></div>
+            <div className="set-row"><span className="name">软件更新</span>
+              <span className="val upd-row">
+                <button className="upd-btn" disabled={updBusy} onClick={checkUpdate}>{updBusy ? "检查中…" : "检查更新"}</button>
+                {updMsg && <span className="upd-msg">{updMsg}</span>}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <span style={{ flex: 1 }} />
-        <span className="set-foot">v0.2 · 数据全部本地存储 · Key 只进 Keychain</span>
+        <span className="set-foot">v{appVersion || "0.1.0"} · 数据全部本地存储 · Key 只进 Keychain</span>
       </aside>
     </>
   );
@@ -493,7 +539,8 @@ function App() {
     refreshProviders();
     api.getPrefs().then((p) => { setPrefsState(p); setDirection(p.direction); }).catch(() => {});
     api.vocabList().then((v) => setVocabCount(v.length)).catch(() => {});
-    api.glossaryList().then((g) => setGlossaryCount(g.length)).catch(() => {});
+    // 启动静默检查更新:有新版仅 toast 提示,不自动安装(在设置面板操作)
+    checkUpdateFn().then((u) => { if (u) say(`发现新版本 v${u.version} · ⌘, 打开设置更新`); }).catch(() => {});    api.glossaryList().then((g) => setGlossaryCount(g.length)).catch(() => {});
   }, []);
 
   // 首启引导:无任何 provider 时自动打开设置
