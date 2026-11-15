@@ -836,7 +836,7 @@ function App() {
   };
 
   const refreshLib = () => api.listArticles().then(setArticles).catch(() => {});
-  const refreshProviders = () => api.providerList().then(setProviders).catch(() => {});
+  const refreshProviders = () => api.providerList().then((p) => { setProviders(p); emit("providers-changed", p).catch(() => {}); }).catch(() => {});
 
   useEffect(() => {
     refreshLib();
@@ -860,7 +860,8 @@ function App() {
   }, [providers]);
 
   const applyPrefs = (u: Partial<Prefs>) => {
-    api.setPrefs(u).then((p) => { setPrefsState(p); setDirection(p.direction); }).catch((e) => say(String(e)));
+    // 广播给快捷窗(webview 预创建,mount 后不再重读 prefs)
+    api.setPrefs(u).then((p) => { setPrefsState(p); setDirection(p.direction); emit("prefs-changed", p).catch(() => {}); }).catch((e) => say(String(e)));
   };
 
   // 深色跨窗同步:主窗切换 → 广播,两窗(含隐藏的快捷窗)即时应用

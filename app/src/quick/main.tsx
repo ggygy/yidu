@@ -59,6 +59,10 @@ function QuickApp() {
   useEffect(() => {
     refreshProviders();
     api.getPrefs().then((p) => { setPrefs(p); setDirection(p.direction); }).catch(() => {});
+    // 主窗改动实时跟随(prefs/provider 广播;webview 预创建,mount 后事件是唯一同步渠道)
+    const un1 = listen<Prefs>("prefs-changed", (e) => { setPrefs(e.payload); setDirection(e.payload.direction); });
+    const un2 = listen<Provider[]>("providers-changed", (e) => setProviders(e.payload));
+    return () => { un1.then((f) => f()); un2.then((f) => f()); };
   }, []);
 
   // 深色外观:跟随主窗设置(同源 localStorage + 跨窗事件即时同步)
