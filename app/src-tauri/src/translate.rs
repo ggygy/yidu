@@ -115,7 +115,9 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     }
 
     let (from, to) = prompt::direction_parts(&req.direction);
-    let system = prompt::system_prompt(from, to, &terms);
+    let stored = crate::commands::load_prefs(&db).map_err(|e| anyhow!(e))?;
+    let custom_prompt = crate::commands::effective_prefs(&stored).custom_prompt;
+    let system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
 
     let block_vec: Vec<Block> = all_blocks
         .iter()

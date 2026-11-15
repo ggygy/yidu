@@ -56,6 +56,7 @@ export interface Prefs {
   direction: string;
   dict_fallback: boolean;
   price_per_mtok: number;
+  custom_prompt: string | null; // null = 用内置默认(英文)
 }
 
 export interface DictSense {

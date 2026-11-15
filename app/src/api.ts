@@ -53,6 +53,10 @@ export function providerSetActive(id: number): Promise<void> {
   return invoke("provider_set_active", { id });
 }
 
+export function providerDelete(id: number): Promise<void> {
+  return invoke("provider_delete", { id });
+}
+
 export function providerTest(id: number): Promise<TestResult> {
   return invoke<TestResult>("provider_test", { id });
 }

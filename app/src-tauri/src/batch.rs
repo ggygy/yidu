@@ -1,15 +1,36 @@
-// 组批(工单 06):3~10 块/批、约 2000 字符预算;中→英输出膨胀,预算除以 1.6
+// 组批(工单 06):3~10 块/批、约 2000 字符预算;CJK→非 CJK 输出膨胀,预算除以 1.6
 use crate::blocks::Block;
 
 pub const MAX_BLOCKS: usize = 10;
 pub const CHAR_BUDGET: usize = 2000;
 
 pub fn char_budget(direction: &str) -> usize {
-    if direction == "zh2en" {
+    if expands_wide(direction) {
         (CHAR_BUDGET as f64 / 1.6) as usize
     } else {
         CHAR_BUDGET
     }
+}
+
+/// CJK 源 → 非 CJK 目标时,拉丁/西里尔输出通常更长,收紧预算;自定义语言按名称字符推断
+fn expands_wide(direction: &str) -> bool {
+    let (from, to) = direction.split_once('2').unwrap_or(("en", "zh"));
+    is_cjk(from) && !is_cjk(to)
+}
+
+fn is_cjk(seg: &str) -> bool {
+    if let Some(name) = seg.strip_prefix('~') {
+        return name.chars().any(is_cjk_char);
+    }
+    matches!(seg, "zh" | "ja" | "ko")
+}
+
+fn is_cjk_char(c: char) -> bool {
+    matches!(c as u32,
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF   // 汉字
+        | 0x3040..=0x30FF                    // 假名
+        | 0xAC00..=0xD7AF | 0x1100..=0x11FF  // 谚文
+    )
 }
 
 /// 输入:全部块(供引用)+ 待译块的全局 idx 列表;输出:批列表
@@ -109,5 +130,16 @@ mod tests {
     fn zh2en_budget_smaller() {
         assert_eq!(char_budget("zh2en"), 1250);
         assert_eq!(char_budget("en2zh"), 2000);
+    }
+
+    #[test]
+    fn cjk_source_budget_generalized() {
+        assert_eq!(char_budget("ja2en"), 1250);
+        assert_eq!(char_budget("ko2fr"), 1250);
+        assert_eq!(char_budget("ja2zh"), 2000); // CJK→CJK 不膨胀
+        assert_eq!(char_budget("en2ja"), 2000);
+        // 自定义语言按名称字符推断(泰语源名含汉字 → 按保守预算)
+        assert_eq!(char_budget("~泰语2en"), 1250);
+        assert_eq!(char_budget("en2~泰语"), 2000);
     }
 }

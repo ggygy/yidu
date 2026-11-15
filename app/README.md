@@ -92,6 +92,15 @@ gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/re
 
 **阅读外观自定义(设置 → 阅读外观)**:阅读背景(跟随主题/护眼米黄/OLED 纯黑/自定义取色,深底自动配浅字)、正文字体(衬线/无衬线/楷体/等宽)、字号 14-20px、行距 1.5-2.2、段间距 4-24px、页宽 640-1000px、强调色五色;全部即时预览,localStorage 持久化,「恢复默认」一键还原。
 
+**多语言与自定义提示词(设置 → 翻译)**:默认方向为任意源→目标组合(内置 8 语:中/英/日/韩/法/德/西/俄,或「其他…」输入任意语言名);「翻译提示词」可整体替换默认风格段(默认英文,支持 `{from}`/`{to}` 占位),`<s>/<t>` 标签协议与方向指令由应用自动附加、不可移除,保证翻译管线稳定。
+
+## 跨平台(Windows)
+
+- CI 产物:`yidu_<版本>_x64-setup.exe`(NSIS);未做 Windows 代码签名,首次运行 SmartScreen 弹「Windows 已保护你的电脑」→ 点「更多信息 → 仍要运行」。
+- 快捷键映射:macOS 的 ⌘/⌥ 在 Windows 对应 Ctrl/Alt(默认呼出快捷键 Alt+T,可改)。
+- 窗口:Windows 用系统原生标题栏(红绿灯 Overlay 仅 macOS);API Key 走 Windows 凭据管理器(keyring windows-native),其余行为一致。
+- 应用内更新三平台通用(latest.json 含 darwin-aarch64 / darwin-x86_64 / windows-x86_64)。
+
 ## 架构(Rust 侧)
 
 ```
@@ -100,8 +109,8 @@ src-tauri/src/
 ├─ db.rs        SQLite 十表 + 版本化迁移(v2:blocks.terms);文章/块/Provider/用量/偏好/词典缓存/生词/术语
 ├─ keychain.rs  keyring 封装 + dev 环境变量后备(effective_key)
 ├─ blocks.rs    pulldown-cmark 字节区间切块;纯文本天然按空行分块;sha256 规范化哈希
-├─ batch.rs     组批 3~10 块/约 2000 字符(中→英 ÷1.6)
-├─ prompt.rs    SYSTEM(七规则+术语段)/userMsg —— 逐字移植 protocol-test.mjs
+├─ batch.rs     组批 3~10 块/约 2000 字符(CJK→非 CJK 目标 ÷1.6)
+├─ prompt.rs    英文三段(风格段可被 prefs.custom_prompt 替换 + 协议段恒附加 + 术语段)/userMsg;方向编码 A2B(~名 = 自定义语言)
 ├─ sse.rs       SSE 行解析 + `</t>` 状态机(标签跨 chunk 安全)+ partial 预览
 ├─ validate.rs  id 序列/标签外文本/URL 集合/围栏数 + 重排补救
 ├─ dict.rs      词典链(有道→dictapi→Provider)+ 归一化卡片 + 缓存;真链路集成测试

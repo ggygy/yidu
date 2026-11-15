@@ -1,8 +1,9 @@
-# 译读 · macOS 构建发布(Developer ID 签名 + 公证 + 更新包 + latest.json)
+# 译读 · 跨平台构建发布(macOS Developer ID 签名+公证 / Windows NSIS + 更新包 + latest.json)
 # 触发:推送 v* 标签 = 正式发布(--latest);Actions 页手动运行 = 快照预发布
 # (预发布不会被 releases/latest/download/latest.json 命中,可安全试跑流水线)。
 # 产物:dmg ×2(aarch64 + x64,配齐 APPLE_* Secrets 时自动签名+公证)
-# + 更新包 .app.tar.gz+sig ×2 + latest.json + checksums.txt。
+# + Windows x64 setup.exe(未签名,SmartScreen 提示可绕过)
+# + 更新包 .app.tar.gz+sig ×2 + setup.exe.sig + latest.json(三平台条目)+ checksums.txt。
 # 方案移植自 ai-trainer-platform 的 build.yml(实测过正式发版),适配 app/ 目录布局。
 #
 # 所需 Secrets(已配 4/7,见 app/README.md「发布与 CI」):
@@ -132,10 +133,57 @@ jobs:
           path: release/
           retention-days: 3
 
-  # 集中在 publish:两条架构腿都成功、产物经 artifacts 汇合后才创建 Release,
+  # Windows x64:NSIS 安装包 + updater .sig。
+  # 未做 Windows 代码签名(无证书),SmartScreen「更多信息 → 仍要运行」即可;
+  # updater 签名 key 跨平台共用同一把。
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> Cargo.lock
+          key: windows-x64
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: app
+
+      - name: 构建 Tauri 应用(NSIS)
+        run: npm run tauri build
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      # GitHub assets 不支持非 ASCII 名(productName 是「译读」),统一改名 yidu_*
+      - name: 规范化安装包文件名
+        shell: bash
+        run: |
+          mkdir -p release
+          VER=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          BUNDLE=app/src-tauri/target/release/bundle
+          cp "$BUNDLE"/nsis/*-setup.exe "release/yidu_${VER}_x64-setup.exe"
+          cp "$BUNDLE"/nsis/*-setup.exe.sig "release/yidu_${VER}_x64-setup.exe.sig"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-dist-x64
+          path: release/
+          retention-days: 3
+
+  # 集中在 publish:所有构建腿都成功、产物经 artifacts 汇合后才创建 Release,
   # 避免单腿构建被取消时留下半成品 Release
   publish:
-    needs: build-macos
+    needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     env:
       # tag push = 正式发布;手动运行(github.ref 非 tag)= 快照预发布
@@ -162,6 +210,11 @@ jobs:
           name: mac-dist-x64
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-dist-x64
+          path: dist
+
       - name: 计算发布标签(正式 tag 优先,否则快照 版本-日期-短SHA)
         id: tag
         run: |
@@ -174,7 +227,7 @@ jobs:
 
       # 双架构产物在 publish 汇合后统一生成,避免各自生成同名冲突
       - name: 生成全平台校验清单 checksums.txt
-        run: cd dist && sha256sum *.dmg *.app.tar.gz > checksums.txt
+        run: cd dist && sha256sum *.dmg *.app.tar.gz *-setup.exe > checksums.txt
 
       - name: 生成应用内更新清单 latest.json
         env:
@@ -183,6 +236,7 @@ jobs:
           VER=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
           ARM_SIG=$(cat "dist/yidu_${VER}_aarch64.app.tar.gz.sig")
           X64_SIG=$(cat "dist/yidu_${VER}_x64.app.tar.gz.sig")
+          WIN_SIG=$(cat "dist/yidu_${VER}_x64-setup.exe.sig")
           # 更新说明 = 上个正式 tag 以来的提交,用户在应用内更新弹窗里看到
           PREV=$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$TAG" | sort -rV | head -1 || true)
           if [ -n "$PREV" ]; then
@@ -194,7 +248,7 @@ jobs:
           echo "== 更新说明($PREV → $TAG)"; echo "$NOTES"
           node -e '
             const fs = require("fs");
-            const [ver, tag, armSig, x64Sig, notes] = process.argv.slice(1);
+            const [ver, tag, armSig, x64Sig, winSig, notes] = process.argv.slice(1);
             const base = `https://github.com/ggygy/yidu/releases/download/${tag}`;
             fs.writeFileSync("dist/latest.json", JSON.stringify({
               version: ver,
@@ -203,10 +257,11 @@ jobs:
               platforms: {
                 "darwin-aarch64": { signature: armSig, url: `${base}/yidu_${ver}_aarch64.app.tar.gz` },
                 "darwin-x86_64": { signature: x64Sig, url: `${base}/yidu_${ver}_x64.app.tar.gz` },
+                "windows-x86_64": { signature: winSig, url: `${base}/yidu_${ver}_x64-setup.exe` },
               },
             }, null, 2) + "\n");
             console.log("latest.json 已生成");
-          ' "$VER" "$TAG" "$ARM_SIG" "$X64_SIG" "$NOTES"
+          ' "$VER" "$TAG" "$ARM_SIG" "$X64_SIG" "$WIN_SIG" "$NOTES"
 
       - name: 创建 Release 并上传全部产物
         env:
@@ -221,6 +276,7 @@ jobs:
               echo '  `xattr -cr "/Applications/译读.app"`(新版 macOS「右键 → 打开」已无效)'
             fi
             echo "- Apple Silicon(M 系列)用 \`_aarch64.dmg\`,Intel 芯片用 \`_x64.dmg\`(终端 uname -m:arm64 → aarch64,x86_64 → x64)"
+            echo "- Windows 用 \`_x64-setup.exe\`(未做代码签名,SmartScreen 弹窗点「更多信息 → 仍要运行」);全局快捷键 Alt+T"
             echo '- 完整性校验:`shasum -a 256 -c checksums.txt`'
             echo '- 应用内更新:设置 → 「关于与更新」可自动下载安装新版本'
           } > release-notes.md

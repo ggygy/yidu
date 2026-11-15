@@ -158,6 +158,7 @@ pub struct PrefsStored {
     pub direction: Option<String>,
     pub dict_fallback: Option<bool>,
     pub price_per_mtok: Option<f64>, // 每 1M tokens 人民币
+    pub custom_prompt: Option<String>, // 翻译风格 prompt;空串 = 用默认
 }
 
 #[derive(Serialize, Clone)]
@@ -169,6 +170,7 @@ pub struct PrefsEffective {
     pub direction: String,
     pub dict_fallback: bool,
     pub price_per_mtok: f64,
+    pub custom_prompt: Option<String>, // None = 用内置默认 prompt
 }
 
 pub fn load_prefs(db: &crate::db::Db) -> Result<PrefsStored, String> {
@@ -188,6 +190,13 @@ pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
         direction: p.direction.clone().unwrap_or_else(|| "en2zh".into()),
         dict_fallback: p.dict_fallback.unwrap_or(true),
         price_per_mtok: p.price_per_mtok.unwrap_or(0.0),
+        // trim 后为空视作未设置(用内置默认 prompt)
+        custom_prompt: p
+            .custom_prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -214,6 +223,9 @@ pub fn set_prefs(app: tauri::AppHandle, state: State<AppState>, update: PrefsSto
     }
     if let Some(v) = &update.direction {
         stored.direction = Some(v.clone());
+    }
+    if let Some(v) = &update.custom_prompt {
+        stored.custom_prompt = Some(v.clone());
     }
     if update.dict_fallback.is_some() {
         stored.dict_fallback = update.dict_fallback;

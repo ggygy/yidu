@@ -8,8 +8,13 @@ import { DEMO_INPUT } from "../data";
 import { CodeBox, Md } from "../md";
 import { Icon } from "../icons";
 import * as api from "../api";
+import { dirLabel, dirShort } from "../languages";
+import { DirPicker } from "../dirselect";
 import type { Block, Prefs, Provider, StreamEvent } from "../types";
 import "../styles.css";
+
+// macOS 头部需给系统红绿灯让位;Windows 有原生标题栏
+const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
 
 // 浏览器直开(无 Tauri 环境)时降级:窗口操作静默跳过
 const w = (() => { try { return getCurrentWindow(); } catch { return null; } })();
@@ -27,6 +32,8 @@ function useLocalFlag(key: string, init: boolean) {
   return [v, (n: boolean) => { localStorage.setItem(key, n ? "1" : "0"); setV(n); }] as const;
 }
 
+const Q_ICON_BTN = "w-7 h-7 rounded-lg text-t3 hover:bg-surface2 hover:text-t1 flex items-center justify-center cursor-pointer border-none bg-none";
+
 function QuickApp() {
   const [input, setInput] = useState("");
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -41,6 +48,7 @@ function QuickApp() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const sessionRef = useRef(0);
+  const [dirOpen, setDirOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
@@ -183,63 +191,76 @@ function QuickApp() {
     setHideOnBlur(next);
   };
 
-  const dirLabel = direction === "en2zh" ? "EN → 中" : "中 → EN";
   const streaming = phase === "streaming";
 
   return (
-    <div className="q-app">
-      {/* 单行头部:红绿灯 + 标题 + 热键 + 窗口操作 */}
-      <div className="q-title">
-        <span className="q-dots"><i /><i /><i /></span>
-        <b>快捷翻译</b>
+    <div className="relative flex flex-col h-screen overflow-hidden bg-surface">
+      {/* 单行头部(v4:即标题栏,可拖拽;系统红绿灯 Overlay 叠加,不再自绘) */}
+      <div className={"h-12 flex items-center gap-2 pr-3 select-none " + (IS_MAC ? "pl-16" : "px-3")} data-tauri-drag-region>
+        <b className="text-xs font-semibold" data-tauri-drag-region>快捷翻译</b>
         <kbd>{prefs ? prefs.hotkey.replace("Alt", "⌥").replace("CommandOrControl", "⌘").replace("Shift", "⇧") : "⌥T"}</kbd>
-        <span className="sp" />
-        <button title={pin ? "置顶中(点击取消)" : "置顶窗口"} className={"icon-btn" + (pin ? " on" : "")} onClick={togglePin}>
+        <span className="flex-1" data-tauri-drag-region />
+        <button title={pin ? "置顶中(点击取消)" : "置顶窗口"} className={Q_ICON_BTN + (pin ? " !text-accent !bg-accentsoft" : "")} onClick={togglePin}>
           <Icon n="pin" size={14} />
         </button>
-        <button className="icon-btn" title="打开主窗口" onClick={() => safe(async () => { const m = await WebviewWindow.getByLabel("main"); await m?.show(); await m?.setFocus(); })}>
+        <button className={Q_ICON_BTN} title="打开主窗口" onClick={() => safe(async () => { const m = await WebviewWindow.getByLabel("main"); await m?.show(); await m?.setFocus(); })}>
           <Icon n="win" size={14} />
         </button>
-        <button className="icon-btn" title="隐藏(热键唤回)" onClick={() => w && safe(() => w.hide())}>
+        <button className={Q_ICON_BTN} title="隐藏(热键唤回)" onClick={() => w && safe(() => w.hide())}>
           <Icon n="x" size={14} />
         </button>
       </div>
 
       {/* 无 Provider 引导 */}
       {providers.length > 0 && !active && (
-        <button className="q-guide" onClick={openSettingsInMain}>
+        <button className="flex items-center justify-center gap-1.5 mx-3.5 mt-1.5 py-[7px] px-2.5 border border-dashed border-accent rounded-[10px] bg-accentsoft text-accent text-[11.5px] font-medium cursor-pointer hover:brightness-95" onClick={openSettingsInMain}>
           <Icon n="sparkles" size={13} /> 尚未激活 Provider,点此打开设置配置
         </button>
       )}
       {providers.length === 0 && (
-        <button className="q-guide" onClick={openSettingsInMain}>
+        <button className="flex items-center justify-center gap-1.5 mx-3.5 mt-1.5 py-[7px] px-2.5 border border-dashed border-accent rounded-[10px] bg-accentsoft text-accent text-[11.5px] font-medium cursor-pointer hover:brightness-95" onClick={openSettingsInMain}>
           <Icon n="sparkles" size={13} /> 首次使用:点此配置翻译 Provider
         </button>
       )}
 
       {/* 去框控制行 */}
-      <div className="q-ctl">
-        <button className="q-naked" onClick={() => setDirection((d) => (d === "en2zh" ? "zh2en" : "en2zh"))}>
-          <Icon n="swap" size={13} /> {dirLabel}
-        </button>
-        <button className={"q-naked" + (auto ? " on" : "")} onClick={() => setAuto(!auto)}>
+      <div className="flex items-center gap-4 px-4 pt-0.5">
+        <div className="relative">
+          <button
+            className="flex items-center gap-1.5 border-none bg-none text-xs text-t2 cursor-pointer px-0.5 py-1 hover:text-t1"
+            title="翻译方向"
+            onClick={() => setDirOpen(!dirOpen)}
+          >
+            <Icon n="swap" size={13} /> {dirShort(direction)} <Icon n="chev" size={11} />
+          </button>
+          {dirOpen && (
+            <div className="absolute z-30 top-full mt-1 left-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] px-3 py-2.5">
+              <DirPicker
+                value={direction}
+                onChange={(d) => { setDirection(d); setDirOpen(false); api.setPrefs({ direction: d }).then(setPrefs).catch(() => {}); }}
+              />
+            </div>
+          )}
+        </div>
+        <button className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 " + (auto ? "text-accent font-medium" : "text-t2")} onClick={() => setAuto(!auto)}>
           <Icon n="zap" size={13} /> 粘贴即译{auto ? "" : " ·关"}
         </button>
-        <span className="sp" />
+        <span className="flex-1" />
         {active ? (
-          <button className="q-provider" title="切换 Provider" onClick={cycleProvider}>
-            <i className="dot" />{active.model}<Icon n="chev" size={11} />
+          <button className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 font-code text-[10px] text-t2 cursor-pointer hover:text-t1" title="切换 Provider" onClick={cycleProvider}>
+            <i className="w-[5px] h-[5px] rounded-full bg-ok" />{active.model}<Icon n="chev" size={11} />
           </button>
         ) : (
-          <button className="q-provider" onClick={openSettingsInMain}>
-            <i className="dot" />未配置<Icon n="chev" size={11} />
+          <button className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 font-code text-[10px] text-t2 cursor-pointer hover:text-t1" onClick={openSettingsInMain}>
+            <i className="w-[5px] h-[5px] rounded-full bg-ok" />未配置<Icon n="chev" size={11} />
           </button>
         )}
       </div>
 
       {/* 输入块 */}
-      <div className="q-in">
+      <div className="mx-3.5 mt-2.5 bg-surface2 rounded-xl px-3 pt-2.5 pb-2">
         <textarea
+          className="w-full h-[76px] border-none outline-none resize-none bg-transparent text-[12.5px] leading-[1.55] text-t1 placeholder:text-t3"
           value={input}
           placeholder="⌘V 粘贴文本或截图(P1 识别)· markdown"
           onChange={(e) => setInput(e.target.value)}
@@ -252,48 +273,48 @@ function QuickApp() {
             if (e.key === "Escape") cancel();
           }}
         />
-        <div className="row">
-          <kbd>⌘V</kbd><span style={{ fontSize: 10, color: "var(--t3)" }}>粘贴</span>
-          <kbd>⌘↩</kbd><span style={{ fontSize: 10, color: "var(--t3)" }}>翻译</span>
-          <kbd>Esc</kbd><span style={{ fontSize: 10, color: "var(--t3)" }}>取消</span>
-          <span className="sp" />
-          <button className="q-link" onClick={() => { setInput(DEMO_INPUT); fire(DEMO_INPUT); }}>载入演示 ⚡</button>
-          {input && <button className="q-link" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); }}>清空</button>}
+        <div className="flex items-center gap-2 mt-1">
+          <kbd>⌘V</kbd><span className="text-[10px] text-t3">粘贴</span>
+          <kbd>⌘↩</kbd><span className="text-[10px] text-t3">翻译</span>
+          <kbd>Esc</kbd><span className="text-[10px] text-t3">取消</span>
+          <span className="flex-1" />
+          <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent" onClick={() => { setInput(DEMO_INPUT); fire(DEMO_INPUT); }}>载入演示 ⚡</button>
+          {input && <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); }}>清空</button>}
         </div>
       </div>
 
       {/* 输出:逐块流式 md 渲染 */}
-      <div className="q-out">
-        {err && <p className="q-err">{err}</p>}
+      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[74px] flex flex-col gap-2.5">
+        {err && <p className="text-[#d25a5a] text-[11.5px] bg-[rgba(210,90,90,0.08)] rounded-lg px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && phase === "idle" && (
-          <p className="placeholder">译文将逐块流式渲染 · 自动存入文章库 · {dirLabel}</p>
+          <p className="text-t3 text-xs mt-1.5 m-0">译文将逐块流式渲染 · 自动存入文章库 · {dirLabel(direction)}</p>
         )}
         {blocks.length > 0 && (
           <>
             {showEn ? (
               /* 对照 = 左右双栏:左原文 · 右译文(竖线分隔);code 块左列渲染占位保块序 1:1 对齐 */
-              <div className="q-cols">
-                <div className="q-col">
+              <div className="grid grid-cols-2 gap-x-3 items-start">
+                <div className="flex flex-col gap-2.5 min-w-0">
                   {blocks.map((b) =>
                     b.kind === "code" ? (
-                      <div key={"e" + b.idx} className="q-code-slot">··· 代码块({b.src.trim().split("\n").length} 行)···</div>
+                      <div key={"e" + b.idx} className="text-[10.5px] text-t3 border border-dashed border-line rounded-lg px-2.5 py-[5px] text-center">··· 代码块({b.src.trim().split("\n").length} 行)···</div>
                     ) : (
-                      <div key={"e" + b.idx} className="en md">
+                      <div key={"e" + b.idx} className="en md text-[11px] leading-[1.6] break-words">
                         <Md text={b.src} />
                       </div>
                     ),
                   )}
                 </div>
-                <div className="q-col">
+                <div className="flex flex-col gap-2.5 min-w-0 border-l border-line pl-3">
                   {blocks.map((b) =>
                     b.kind === "code" ? (
                       <CodeBox key={b.idx} src={b.src} />
                     ) : b.trans ? (
-                      <div key={b.idx} className={"zh md" + (b.status === "streaming" ? " streaming" : "")}>
+                      <div key={b.idx} className="zh md !text-[13px] !leading-[1.8] !font-ui" style={{ opacity: b.status === "streaming" ? 0.55 : undefined }}>
                         <Md text={b.trans} />
                       </div>
                     ) : (
-                      <p key={b.idx} className="placeholder">{streaming ? "…" : "待译"}</p>
+                      <p key={b.idx} className="text-t3 text-xs m-0">{streaming ? "…" : "待译"}</p>
                     ),
                   )}
                 </div>
@@ -303,40 +324,47 @@ function QuickApp() {
                 b.kind === "code" ? (
                   <CodeBox key={b.idx} src={b.src} />
                 ) : b.trans ? (
-                  <div key={b.idx} className={"zh md" + (b.status === "streaming" ? " streaming" : "")}>
+                  <div key={b.idx} className="zh md !text-[13px] !leading-[1.8] !font-ui" style={{ opacity: b.status === "streaming" ? 0.55 : undefined }}>
                     <Md text={b.trans} />
                   </div>
                 ) : (
-                  <p key={b.idx} className="placeholder">{streaming ? "…" : "待译"}</p>
+                  <p key={b.idx} className="text-t3 text-xs m-0">{streaming ? "…" : "待译"}</p>
                 ),
               )
             )}
-            {streaming && <div className="shimmer"><div className="track"><i /></div><span>流式输出中(Esc 取消)</span></div>}
+            {streaming && (
+              <div className="flex items-center gap-2.5 mt-1">
+                <div className="w-[150px] h-[3px] bg-surface2 rounded-sm overflow-hidden">
+                  <i className="block w-2/5 h-full bg-accent rounded-sm [animation:slide_1.2s_infinite]" />
+                </div>
+                <span className="text-[11px] text-accent">流式输出中(Esc 取消)</span>
+              </div>
+            )}
           </>
         )}
       </div>
 
       {/* 交互提示 */}
-      <div className="q-hint">
+      <div className="absolute inset-x-0 bottom-[62px] text-center text-[9.5px] text-t3 z-[19]">
         实验开关:
-        <a style={{ cursor: "pointer", color: hideOnBlur ? "var(--accent)" : "inherit" }} onClick={toggleBlur}>[失焦隐藏:{hideOnBlur ? "开" : "关"}]</a>
+        <a className="cursor-pointer" style={{ color: hideOnBlur ? "var(--accent)" : "inherit" }} onClick={toggleBlur}>[失焦隐藏:{hideOnBlur ? "开" : "关"}]</a>
         {" · 热键唤出 · 自动入库"}
       </div>
 
       {/* 悬浮操作胶囊 */}
-      <div className="q-capsule">
-        <button className="q-pill" disabled={!outText} onClick={() => navigator.clipboard?.writeText(outText).then(() => say("已复制"))}>
+      <div className="absolute left-3.5 right-3.5 bottom-3.5 h-11 bg-surface border border-line rounded-[22px] shadow-[var(--shadow-capsule)] flex items-center gap-1.5 pl-2.5 pr-2 z-20">
+        <button className="flex items-center gap-1.5 h-8 px-3 border-none bg-surface2 rounded-full text-[11.5px] text-t2 cursor-pointer disabled:opacity-40" disabled={!outText} onClick={() => navigator.clipboard?.writeText(outText).then(() => say("已复制"))}>
           <Icon n="copy" size={13} /> 复制
         </button>
-        <button className={"q-pill" + (showEn ? " on" : "")} disabled={!blocks.length} title="对照(⌘D)" onClick={() => setShowEn(!showEn)}>
+        <button className={"flex items-center gap-1.5 h-8 px-3 border-none rounded-full text-[11.5px] cursor-pointer disabled:opacity-40 " + (showEn ? "bg-accentsoft text-accent font-medium" : "bg-surface2 text-t2")} disabled={!blocks.length} title="对照(⌘D)" onClick={() => setShowEn(!showEn)}>
           <Icon n="eye" size={13} /> 对照
         </button>
-        <span className="sp" />
-        <button className="q-save" disabled={!articleId} onClick={openInMain}>
+        <span className="flex-1" />
+        <button className="flex items-center gap-1.5 h-8 px-3 border-none rounded-full text-[11.5px] font-medium text-accent cursor-pointer bg-none disabled:opacity-40 disabled:text-t3" disabled={!articleId} onClick={openInMain}>
           <Icon n="fileplus" size={13} /> 在主窗打开
         </button>
       </div>
-      {toast && <div className="q-toast">{toast}</div>}
+      {toast && <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-t1 text-bg text-[11px] px-3 py-1.5 rounded-lg z-[99] whitespace-nowrap">{toast}</div>}
     </div>
   );
 }
