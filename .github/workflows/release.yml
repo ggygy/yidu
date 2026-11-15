@@ -1,0 +1,64 @@
+# 译读 · macOS Release 构建(签名 + 公证 + 更新包 + latest.json)
+# 触发:推送 v* 标签,或 Actions 页手动运行;产物进草稿 Release,审核后 publish
+# 所需 Secrets(仓库 Settings → Secrets → Actions,配置说明见 app/README.md「发布与 CI」):
+#   APPLE_CERTIFICATE             Developer ID Application 证书 .p12 的 base64
+#   APPLE_CERTIFICATE_PASSWORD    该 .p12 的导出密码
+#   APPLE_SIGNING_IDENTITY        证书常用名,如 "Developer ID Application: NAME (TEAMID)"
+#   APPLE_ID                      公证用 Apple ID 邮箱
+#   APPLE_PASSWORD                App 专用密码(appleid.apple.com 生成)
+#   APPLE_TEAM_ID                 开发者团队 ID(10 位)
+#   TAURI_SIGNING_PRIVATE_KEY     ~/.tauri/yidu.key 内容(updater 签名)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  私钥密码(本仓库私钥为空,secret 可不设)
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest # arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: app
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> Cargo.lock
+
+      - name: Build, sign, notarize and upload to draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS 签名 + 公证
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # 更新包签名(软件内更新校验)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: v__VERSION__ # 取 tauri.conf.json 的 version
+          releaseName: "译读 v__VERSION__"
+          releaseBody: "见「关于与更新」检查更新;macOS arm64。"
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true # 生成并上传 latest.json(updater endpoint 指向它)
