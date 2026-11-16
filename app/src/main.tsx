@@ -9,6 +9,7 @@ import { Icon } from "./icons";
 import * as api from "./api";
 import { dirLabel, langZh, splitDir } from "./languages";
 import { DirPicker } from "./dirselect";
+import { applyReaderStyle, loadReaderStyle, RS_ACCENTS, RS_DEFAULT, type ReaderStyle } from "./reader";
 import type { Article, Block, DictCard, GlossaryItem, Prefs, Provider, StreamEvent, UsageSummary, VocabEntry } from "./types";
 import "./styles.css";
 
@@ -44,59 +45,7 @@ function fmtTokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
 }
 
-// ---------- 阅读外观自定义(localStorage 持久化,即时注入 CSS 变量) ----------
-
-type ReaderTheme = "default" | "sepia" | "oled" | "custom";
-type ReaderFont = "serif" | "sans" | "kai" | "mono";
-type ReaderStyle = {
-  theme: ReaderTheme;
-  customBg: string; // theme=custom 时的阅读区背景色
-  font: ReaderFont;
-  size: number;   // 译文字号 px
-  lineH: number;  // 译文行高
-  gap: number;    // 块间距 px
-  width: number;  // 内容宽度 px
-  accent: string; // "" = 跟随主题默认
-};
-
-const RS_FONTS: Record<ReaderFont, string> = {
-  serif: '"Source Serif 4", Georgia, "Noto Serif SC", "Songti SC", serif',
-  sans: '-apple-system, "Inter", "Noto Sans SC", "PingFang SC", sans-serif',
-  kai: '"Kaiti SC", "STKaiti", "Kaiti", serif',
-  mono: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-};
-const RS_ACCENTS = ["", "#8b5cf6", "#10b981", "#f59e0b", "#ec4899"];
-const RS_DEFAULT: ReaderStyle = { theme: "default", customBg: "#f5f0e6", font: "serif", size: 16, lineH: 1.8, gap: 10, width: 720, accent: "" };
-
-// 十六进制亮度(0~1),custom 深底自动配浅字
-function hexLuminance(hex: string): number {
-  const m = hex.replace("#", "");
-  if (m.length < 6) return 1;
-  const r = parseInt(m.slice(0, 2), 16) / 255, g = parseInt(m.slice(2, 4), 16) / 255, b = parseInt(m.slice(4, 6), 16) / 255;
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function applyReaderStyle(rs: ReaderStyle) {
-  const r = document.documentElement.style;
-  r.setProperty("--zh-size", `${rs.size}px`);
-  r.setProperty("--zh-line", String(rs.lineH));
-  r.setProperty("--zh-font", RS_FONTS[rs.font]);
-  r.setProperty("--reader-gap", `${rs.gap}px`);
-  r.setProperty("--reader-w", `${rs.width}px`);
-  if (rs.accent) r.setProperty("--accent", rs.accent); else r.removeProperty("--accent");
-  r.removeProperty("--reader-bg"); r.removeProperty("--reader-t1");
-  if (rs.theme === "sepia") { r.setProperty("--reader-bg", "#f3ecd9"); r.setProperty("--reader-t1", "#3b3226"); }
-  else if (rs.theme === "oled") { r.setProperty("--reader-bg", "#000000"); r.setProperty("--reader-t1", "#e8e8ea"); }
-  else if (rs.theme === "custom") {
-    r.setProperty("--reader-bg", rs.customBg);
-    if (hexLuminance(rs.customBg) < 0.35) r.setProperty("--reader-t1", "#e8e8ea");
-  }
-  localStorage.setItem("yidu-reader", JSON.stringify(rs));
-}
-
-function loadReaderStyle(): ReaderStyle {
-  try { return { ...RS_DEFAULT, ...JSON.parse(localStorage.getItem("yidu-reader") || "{}") }; } catch { return RS_DEFAULT; }
-}
+// ---------- 阅读外观自定义(实现抽到 reader.ts,两窗共用) ----------
 
 const SOURCE_LABEL: Record<string, string> = {
   youdao: "有道词典(免费)",
@@ -270,7 +219,7 @@ const PRESETS: Record<string, { kind: string; base_url: string; models: string[]
   },
 };
 
-const ROW = "flex items-center justify-between bg-surface2 rounded-[10px] px-3 py-[7px] min-h-[38px]";
+const ROW = "flex items-center justify-between gap-2.5 bg-surface2 rounded-[10px] px-3 py-[7px] min-h-[38px]";
 const ROW_NAME = "text-[12.5px] text-t2";
 const ROW_VAL = "flex items-center gap-2 font-code text-[11px] text-t1";
 const PLAIN = "font-ui text-xs";
@@ -374,21 +323,17 @@ function SettingsPanel({
     return () => window.removeEventListener("keydown", h, true);
   }, [capturing]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 预设 chip:已配置过 = 仅选中查看(不隐式改配置/激活);未配置 = 创建并启用(首配一步到位)
   const pickPreset = async (preset: string) => {
     const { kind, base_url, model } = PRESETS[preset];
     const existing = providers.find((p) => p.name === preset);
     try {
-      let id: number;
-      if (existing && existing.base_url === base_url) {
-        id = existing.id;
-      } else {
-        const saved = await api.providerSave({ id: existing?.id ?? null, name: preset, kind, base_url, model });
-        id = saved.id;
-      }
-      await api.providerSetActive(id);
+      if (existing) { setSelId(existing.id); return; }
+      const saved = await api.providerSave({ id: null, name: preset, kind, base_url, model });
+      await api.providerSetActive(saved.id);
       await refreshProviders();
-      setSelId(id);
-      say(`已启用 ${preset}`);
+      setSelId(saved.id);
+      say(`已启用 ${preset},粘贴 API Key 后即可翻译`);
     } catch (e) { say(String(e)); }
   };
 
@@ -470,10 +415,11 @@ function SettingsPanel({
             {Object.keys(PRESETS).map((p) => (
               <button
                 key={p}
-                className={"flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11.5px] cursor-pointer border-none " + (selPresetName === p || (!selPresetName && active?.name === p) ? "bg-accentsoft text-accent font-semibold" : "bg-surface2 text-t2")}
+                title={selPresetName === p ? "查看配置(激活状态见下方绿点)" : `配置 ${p}`}
+                className={"flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11.5px] cursor-pointer border-none " + (selPresetName === p ? "bg-accentsoft text-accent font-semibold" : "bg-surface2 text-t2")}
                 onClick={() => pickPreset(p)}
               >
-                {p === "Ollama" && <i className="w-[5px] h-[5px] rounded-full bg-ok" />}{p}
+                {active?.name === p && <i className="w-[5px] h-[5px] rounded-full bg-ok" title="使用中" />}{p}
               </button>
             ))}
             {providers.filter((p) => !PRESETS[p.name]).map((p) => (
@@ -513,7 +459,7 @@ function SettingsPanel({
                 <input className={INPUT} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} spellCheck={false} />
               </div>
               <div className={ROW}><span className={ROW_NAME}>API Key</span>
-                <input className={INPUT} type="password" placeholder={sel.has_key ? "••••••••(已存 Keychain,输入以更换)" : "sk-…(只存 Keychain)"} value={keyInput} onChange={(e) => setKeyInput(e.target.value)} spellCheck={false} />
+                <input className={INPUT} type="password" placeholder={sel.has_key ? "已存 Keychain·输入以更换" : "sk-…(只存 Keychain)"} value={keyInput} onChange={(e) => setKeyInput(e.target.value)} spellCheck={false} />
                 <button className="text-[10.5px] text-t2 cursor-pointer border-none bg-none px-1 disabled:opacity-50" disabled={testing} onClick={test}>{testing ? "测试中…" : "测试"}</button>
                 {testMsg && <span className={"font-code text-[10.5px] font-semibold " + (testMsg.startsWith("✓") ? "text-ok" : "text-t2")}>{testMsg}</span>}
               </div>
@@ -811,7 +757,8 @@ function App() {
   const [hintDone, setHintDone] = useLocalFlag("yidu-hint-done", false); // v4:首译后永久隐藏快捷键提示
   const [confirm, setConfirm] = useState<{ title: string; body?: string; confirmText: string; onConfirm: () => void } | null>(null);
 
-  useEffect(() => { applyReaderStyle(rs); }, [rs]);
+  // 阅读外观:本窗应用 + 广播快捷窗(quick 同源读 localStorage 兜初始值,事件管增量)
+  useEffect(() => { applyReaderStyle(rs); emit("reader-changed", rs).catch(() => {}); }, [rs]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [prefs, setPrefsState] = useState<Prefs | null>(null);
   const [direction, setDirection] = useState("en2zh");

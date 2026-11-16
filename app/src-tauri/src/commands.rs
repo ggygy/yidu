@@ -77,36 +77,52 @@ pub struct ProviderInput {
 }
 
 #[tauri::command]
-pub fn provider_save(state: State<AppState>, input: ProviderInput) -> Result<ProviderRow, String> {
-    let id = state
-        .db
-        .upsert_provider(
-            input.id,
-            &input.name,
-            &input.kind,
-            &input.base_url,
-            &input.model,
-            input.extra.as_deref().unwrap_or("{}"),
-        )
-        .map_err(err)?;
-    state.db.get_provider(id).map_err(err)
+pub async fn provider_save(state: State<'_, AppState>, input: ProviderInput) -> Result<ProviderRow, String> {
+    let db = state.db.clone();
+    // SQLite 写 + 后续读放线程池;同步命令会跑在主线程卡 UI
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = db
+            .upsert_provider(
+                input.id,
+                &input.name,
+                &input.kind,
+                &input.base_url,
+                &input.model,
+                input.extra.as_deref().unwrap_or("{}"),
+            )
+            .map_err(err)?;
+        db.get_provider(id).map_err(err)
+    })
+    .await
+    .map_err(|e| err(e))?
 }
 
 #[tauri::command]
-pub fn provider_delete(state: State<AppState>, id: i64) -> Result<(), String> {
-    keychain::set_key(id, "").map_err(err)?; // 顺带清 Keychain
-    state.db.delete_provider(id).map_err(err)
+pub async fn provider_delete(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db = state.db.clone();
+    // Keychain 清 key 可能阻塞/触发系统授权,勿占主线程
+    tauri::async_runtime::spawn_blocking(move || {
+        keychain::set_key(id, "").map_err(err)?; // 顺带清 Keychain
+        db.delete_provider(id).map_err(err)
+    })
+    .await
+    .map_err(|e| err(e))?
 }
 
 #[tauri::command]
-pub fn provider_set_key(state: State<AppState>, id: i64, key: String) -> Result<(), String> {
-    let _ = state;
-    keychain::set_key(id, &key).map_err(err)
+pub async fn provider_set_key(_state: State<'_, AppState>, id: i64, key: String) -> Result<(), String> {
+    // Keychain 写是最重的一个:Security 框架调用会卡主线程导致整窗冻结/闪动
+    tauri::async_runtime::spawn_blocking(move || keychain::set_key(id, &key).map_err(err))
+        .await
+        .map_err(|e| err(e))?
 }
 
 #[tauri::command]
-pub fn provider_set_active(state: State<AppState>, id: i64) -> Result<(), String> {
-    state.db.set_active_provider(id).map_err(err)
+pub async fn provider_set_active(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || db.set_active_provider(id).map_err(err))
+        .await
+        .map_err(|e| err(e))?
 }
 
 #[tauri::command]

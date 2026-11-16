@@ -10,6 +10,7 @@ import { Icon } from "../icons";
 import * as api from "../api";
 import { dirLabel, dirShort } from "../languages";
 import { DirPicker } from "../dirselect";
+import { applyReaderStyle, loadReaderStyle, type ReaderStyle } from "../reader";
 import type { Block, Prefs, Provider, StreamEvent } from "../types";
 import "../styles.css";
 
@@ -49,13 +50,14 @@ function QuickApp() {
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const sessionRef = useRef(0);
   const [dirOpen, setDirOpen] = useState(false);
+  const [provOpen, setProvOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
   const active = providers.find((p) => p.is_active);
   const outText = blocks.filter((b) => b.trans).map((b) => b.trans).join("\n\n");
 
-  const refreshProviders = () => api.providerList().then(setProviders).catch(() => {});
+  const refreshProviders = () => api.providerList().then((p) => { setProviders(p); emit("providers-changed", p).catch(() => {}); }).catch(() => {});
   useEffect(() => {
     refreshProviders();
     api.getPrefs().then((p) => { setPrefs(p); setDirection(p.direction); }).catch(() => {});
@@ -63,6 +65,13 @@ function QuickApp() {
     const un1 = listen<Prefs>("prefs-changed", (e) => { setPrefs(e.payload); setDirection(e.payload.direction); });
     const un2 = listen<Provider[]>("providers-changed", (e) => setProviders(e.payload));
     return () => { un1.then((f) => f()); un2.then((f) => f()); };
+  }, []);
+
+  // 阅读外观:跟随主窗(同源 localStorage 取初始值,reader-changed 事件管增量)
+  useEffect(() => {
+    applyReaderStyle(loadReaderStyle());
+    const un = listen<ReaderStyle>("reader-changed", (e) => applyReaderStyle(e.payload));
+    return () => { un.then((f) => f()); };
   }, []);
 
   // 深色外观:跟随主窗设置(同源 localStorage + 跨窗事件即时同步)
@@ -173,14 +182,14 @@ function QuickApp() {
     });
   };
 
-  const cycleProvider = async () => {
-    if (providers.length < 1) return;
-    const i = providers.findIndex((p) => p.is_active);
-    const next = providers[(i + 1) % providers.length];
+  const switchProvider = async (id: number) => {
+    const next = providers.find((p) => p.id === id);
+    if (!next || next.is_active) { setProvOpen(false); return; }
+    setProvOpen(false);
     try {
-      await api.providerSetActive(next.id);
-      await refreshProviders();
-      say(`已切换 ${next.model}`);
+      await api.providerSetActive(id);
+      await refreshProviders(); // 内部广播 providers-changed,主窗同步
+      say(`已切换到 ${next.name}`);
     } catch (e) { say(String(e)); }
   };
 
@@ -250,15 +259,44 @@ function QuickApp() {
           <Icon n="zap" size={13} /> 粘贴即译{auto ? "" : " ·关"}
         </button>
         <span className="flex-1" />
-        {active ? (
-          <button className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 font-code text-[10px] text-t2 cursor-pointer hover:text-t1" title="切换 Provider" onClick={cycleProvider}>
-            <i className="w-[5px] h-[5px] rounded-full bg-ok" />{active.model}<Icon n="chev" size={11} />
-          </button>
-        ) : (
-          <button className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 font-code text-[10px] text-t2 cursor-pointer hover:text-t1" onClick={openSettingsInMain}>
-            <i className="w-[5px] h-[5px] rounded-full bg-ok" />未配置<Icon n="chev" size={11} />
-          </button>
-        )}
+        <div className="relative">
+          {active ? (
+            <button
+              className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1"
+              title={`模型 ${active.model} · 点击选择 Provider`}
+              onClick={() => setProvOpen(!provOpen)}
+            >
+              <i className="w-[5px] h-[5px] rounded-full bg-ok" />{active.name}<Icon n="chev" size={11} />
+            </button>
+          ) : (
+            <button
+              className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1"
+              onClick={openSettingsInMain}
+            >
+              未配置<Icon n="chev" size={11} />
+            </button>
+          )}
+          {provOpen && (
+            <div className="absolute z-40 top-full mt-1 right-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] py-1.5 min-w-[180px]">
+              {providers.map((p) => (
+                <button
+                  key={p.id}
+                  className="w-full flex items-center gap-2 border-none bg-none px-3 py-[7px] text-[11.5px] cursor-pointer hover:bg-surface2 text-t2"
+                  title={`模型 ${p.model}`}
+                  onClick={() => switchProvider(p.id)}
+                >
+                  <span className="w-[5px] flex-none">{p.is_active && <i className="block w-[5px] h-[5px] rounded-full bg-ok" />}</span>
+                  <span className={p.is_active ? "text-t1 font-semibold" : ""}>{p.name}</span>
+                  <span className="ml-auto font-code text-[10px] text-t3">{p.model}</span>
+                </button>
+              ))}
+              <div className="h-px bg-line my-1" />
+              <button className="w-full flex items-center gap-2 border-none bg-none px-3 py-[7px] text-[11.5px] cursor-pointer hover:bg-surface2 text-t3" onClick={() => { setProvOpen(false); openSettingsInMain(); }}>
+                <span className="w-[5px] flex-none" />管理 Provider…
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 输入块 */}
@@ -314,7 +352,7 @@ function QuickApp() {
                     b.kind === "code" ? (
                       <CodeBox key={b.idx} src={b.src} />
                     ) : b.trans ? (
-                      <div key={b.idx} className="zh md !text-[13px] !leading-[1.8] !font-ui" style={{ opacity: b.status === "streaming" ? 0.55 : undefined }}>
+                      <div key={b.idx} className="zh md" style={{ opacity: b.status === "streaming" ? 0.55 : undefined }}>
                         <Md text={b.trans} />
                       </div>
                     ) : (
@@ -328,7 +366,7 @@ function QuickApp() {
                 b.kind === "code" ? (
                   <CodeBox key={b.idx} src={b.src} />
                 ) : b.trans ? (
-                  <div key={b.idx} className="zh md !text-[13px] !leading-[1.8] !font-ui" style={{ opacity: b.status === "streaming" ? 0.55 : undefined }}>
+                  <div key={b.idx} className="zh md" style={{ opacity: b.status === "streaming" ? 0.55 : undefined }}>
                     <Md text={b.trans} />
                   </div>
                 ) : (
