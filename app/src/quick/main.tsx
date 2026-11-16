@@ -208,10 +208,30 @@ function QuickApp() {
 
   const streaming = phase === "streaming";
 
+  // 下拉点外部关闭(按钮与面板内 stopPropagation,面板项自行收起)
+  useEffect(() => {
+    if (!dirOpen && !provOpen) return;
+    const h = () => { setDirOpen(false); setProvOpen(false); };
+    window.addEventListener("click", h);
+    return () => window.removeEventListener("click", h);
+  }, [dirOpen, provOpen]);
+
+  // 全局 Esc:先收下拉,翻译中则取消会话
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (dirOpen || provOpen) { setDirOpen(false); setProvOpen(false); return; }
+      if (phase === "streaming") cancel();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirOpen, provOpen, phase]);
+
   return (
     <div className="relative flex flex-col h-screen overflow-hidden bg-surface">
       {/* 单行头部(v4:即标题栏,可拖拽;系统红绿灯 Overlay 叠加,不再自绘) */}
-      <div className={"h-12 flex items-center gap-2 pr-3 select-none " + (IS_MAC ? "pl-16" : "px-3")} data-tauri-drag-region>
+      <div className={"h-12 flex items-center gap-2 pr-3 select-none " + (IS_MAC ? "pl-20" : "px-3")} data-tauri-drag-region>
         <b className="text-xs font-semibold" data-tauri-drag-region>快捷翻译</b>
         <kbd>{prefs ? prefs.hotkey.replace("Alt", "⌥").replace("CommandOrControl", "⌘").replace("Shift", "⇧") : "⌥T"}</kbd>
         <span className="flex-1" data-tauri-drag-region />
@@ -244,12 +264,12 @@ function QuickApp() {
           <button
             className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 " + (direction === "auto" ? "text-accent font-medium" : "text-t2")}
             title={direction === "auto" ? `自动识别:${dirLabel(detectDir(input))}` : "翻译方向"}
-            onClick={() => setDirOpen(!dirOpen)}
+            onClick={(e) => { e.stopPropagation(); setDirOpen(!dirOpen); setProvOpen(false); }}
           >
             <Icon n={direction === "auto" ? "zap" : "swap"} size={13} /> {dirShort(direction)} <Icon n="chev" size={11} />
           </button>
           {dirOpen && (
-            <div className="absolute z-30 top-full mt-1 left-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] px-3 py-2.5">
+            <div className="absolute z-30 top-full mt-1 left-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
               <DirPicker
                 value={direction}
                 onChange={(d) => { setDirection(d); setDirOpen(false); api.setPrefs({ direction: d }).then(setPrefs).catch(() => {}); }}
@@ -266,7 +286,7 @@ function QuickApp() {
             <button
               className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1"
               title={`模型 ${active.model} · 点击选择 Provider`}
-              onClick={() => setProvOpen(!provOpen)}
+              onClick={(e) => { e.stopPropagation(); setProvOpen(!provOpen); setDirOpen(false); }}
             >
               <i className="w-[5px] h-[5px] rounded-full bg-ok" />{active.name}<Icon n="chev" size={11} />
             </button>
@@ -279,7 +299,7 @@ function QuickApp() {
             </button>
           )}
           {provOpen && (
-            <div className="absolute z-40 top-full mt-1 right-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] py-1.5 min-w-[180px]">
+            <div className="absolute z-40 top-full mt-1 right-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] py-1.5 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
               {providers.map((p) => (
                 <button
                   key={p.id}
@@ -311,21 +331,22 @@ function QuickApp() {
           onPaste={(e) => {
             const t = e.clipboardData.getData("text");
             if (t) { e.preventDefault(); pasteOrType(t); }
+            else { e.preventDefault(); say("剪贴板没有文本(截图 OCR 属后续计划)"); }
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); fire(); }
             if (e.key === "Escape") cancel();
           }}
         />
-        <div className="flex items-center gap-2 mt-1">
-          <kbd>⌘V</kbd><span className="text-[10px] text-t3">粘贴</span>
-          <kbd>⌘↩</kbd><span className="text-[10px] text-t3">翻译</span>
-          <kbd>Esc</kbd><span className="text-[10px] text-t3">取消</span>
+        <div className="flex items-center gap-1.5 mt-1">
+          <kbd title="粘贴">⌘V</kbd>
+          <kbd title="翻译">⌘↩</kbd>
+          <kbd title="取消">Esc</kbd>
           <span className="flex-1" />
-          <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent" onClick={() => { setInput(DEMO_INPUT); fire(DEMO_INPUT); }}>载入演示 ⚡</button>
-          {input && <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); }}>清空</button>}
+          <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent whitespace-nowrap" onClick={() => { setInput(DEMO_INPUT); fire(DEMO_INPUT); }}>演示 ⚡</button>
+          {input && <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent whitespace-nowrap" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); }}>清空</button>}
           <button
-            className="flex items-center gap-1 h-[26px] px-3 border-none bg-accent text-white rounded-[8px] text-[11px] font-medium cursor-pointer disabled:opacity-40 disabled:cursor-default"
+            className="flex items-center gap-1 h-[26px] px-3 border-none bg-accent text-white rounded-[8px] text-[11px] font-medium cursor-pointer disabled:opacity-40 disabled:cursor-default whitespace-nowrap flex-none"
             disabled={!input.trim() || streaming}
             title="翻译(⌘↩)"
             onClick={() => fire()}
@@ -335,8 +356,11 @@ function QuickApp() {
         </div>
       </div>
 
-      {/* 输出:逐块流式 md 渲染 */}
-      <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[74px] flex flex-col gap-2.5">
+      {/* 输出:逐块流式 md 渲染;阅读区接 --reader-bg/--reader-t1(黑背景/OLED 等阅读外观在此生效) */}
+      <div
+        className="flex-1 overflow-y-auto px-4 pt-3 pb-[74px] flex flex-col gap-2.5"
+        style={{ background: "var(--reader-bg, transparent)", color: "var(--reader-t1, var(--t1))" }}
+      >
         {err && <p className="text-[#d25a5a] text-[11.5px] bg-[rgba(210,90,90,0.08)] rounded-lg px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && phase === "idle" && (
           <p className="text-t3 text-xs mt-1.5 m-0">
