@@ -7,7 +7,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { CodeBox, Md, type TermHit, type WordHandler } from "./md";
 import { Icon } from "./icons";
 import * as api from "./api";
-import { dirLabel, langZh, splitDir } from "./languages";
+import { dirLabel, langZh, splitDir, detectDir } from "./languages";
 import { DirPicker } from "./dirselect";
 import { applyReaderStyle, loadReaderStyle, RS_ACCENTS, RS_DEFAULT, type ReaderStyle } from "./reader";
 import type { Article, Block, DictCard, GlossaryItem, Prefs, Provider, StreamEvent, UsageSummary, VocabEntry } from "./types";
@@ -914,8 +914,10 @@ function App() {
     if (!draft.trim()) return;
     setComposing(false);
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
+    // auto = 识别后解析成具体方向再发(Rust 侧只见 en2zh 形式)
+    const effDir = direction === "auto" ? detectDir(draft) : direction;
     try {
-      const s = await api.translate({ text: draft, direction, kind: "md" }, onStreamEvent);
+      const s = await api.translate({ text: draft, direction: effDir, kind: "md" }, onStreamEvent);
       sessionRef.current = s;
       setDraft("");
       setStreamErr(null);

@@ -38,13 +38,31 @@ export function langShort(seg: string): string {
 }
 
 export function dirLabel(direction: string): string {
+  if (direction === "auto") return "自动识别";
   const [a, b] = splitDir(direction);
   return `${langZh(a)} → ${langZh(b)}`;
 }
 
 export function dirShort(direction: string): string {
+  if (direction === "auto") return "自动";
   const [a, b] = splitDir(direction);
   return `${langShort(a)} → ${langShort(b)}`;
+}
+
+// 自动方向:按文字特征猜源语言。中文原文 → 译英;其余 → 译中(与 Rust 编码一致,发送前已解析成具体方向)
+export function detectDir(text: string): string {
+  const t = text.trim();
+  if (!t) return "en2zh";
+  if (/[\u3040-\u30ff]/.test(t)) return "ja2zh";      // 假名 → 日语
+  if (/[\uac00-\ud7af]/.test(t)) return "ko2zh";      // 谚文 → 韩语
+  if (/[\u0400-\u04ff]/.test(t)) return "ru2zh";      // 西里尔 → 俄语
+  const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latin = (t.match(/[A-Za-z]/g) || []).length;
+  if (cjk > 0 && cjk * 2 >= latin) return "zh2en";    // 汉字为主 → 译英
+  if (/[àâäéèêëîïôùûüçœæ]/i.test(t)) return "fr2zh";
+  if (/[äöüß]/i.test(t)) return "de2zh";
+  if (/[áíóúñ¿¡]/i.test(t)) return "es2zh";
+  return "en2zh";                                     // 默认按英语
 }
 
 // 自定义语言名编码净化:去掉会截断 direction 的 "2"

@@ -8,7 +8,7 @@ import { DEMO_INPUT } from "../data";
 import { CodeBox, Md } from "../md";
 import { Icon } from "../icons";
 import * as api from "../api";
-import { dirLabel, dirShort } from "../languages";
+import { dirLabel, dirShort, detectDir } from "../languages";
 import { DirPicker } from "../dirselect";
 import { applyReaderStyle, loadReaderStyle, type ReaderStyle } from "../reader";
 import type { Block, Prefs, Provider, StreamEvent } from "../types";
@@ -144,8 +144,10 @@ function QuickApp() {
     setErr(null);
     setBlocks([]);
     setArticleId(null);
+    // auto = 按文字特征识别源语言再定方向(发送前解析,Rust 只见具体方向)
+    const effDir = direction === "auto" ? detectDir(text) : direction;
     try {
-      const s = await api.translate({ text, direction, kind: "paste" }, onEvent);
+      const s = await api.translate({ text, direction: effDir, kind: "paste" }, onEvent);
       sessionRef.current = s;
     } catch (e) {
       setPhase("idle");
@@ -240,11 +242,11 @@ function QuickApp() {
       <div className="flex items-center gap-4 px-4 pt-0.5">
         <div className="relative">
           <button
-            className="flex items-center gap-1.5 border-none bg-none text-xs text-t2 cursor-pointer px-0.5 py-1 hover:text-t1"
-            title="翻译方向"
+            className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 " + (direction === "auto" ? "text-accent font-medium" : "text-t2")}
+            title={direction === "auto" ? `自动识别:${dirLabel(detectDir(input))}` : "翻译方向"}
             onClick={() => setDirOpen(!dirOpen)}
           >
-            <Icon n="swap" size={13} /> {dirShort(direction)} <Icon n="chev" size={11} />
+            <Icon n={direction === "auto" ? "zap" : "swap"} size={13} /> {dirShort(direction)} <Icon n="chev" size={11} />
           </button>
           {dirOpen && (
             <div className="absolute z-30 top-full mt-1 left-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] px-3 py-2.5">
@@ -322,6 +324,14 @@ function QuickApp() {
           <span className="flex-1" />
           <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent" onClick={() => { setInput(DEMO_INPUT); fire(DEMO_INPUT); }}>载入演示 ⚡</button>
           {input && <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); }}>清空</button>}
+          <button
+            className="flex items-center gap-1 h-[26px] px-3 border-none bg-accent text-white rounded-[8px] text-[11px] font-medium cursor-pointer disabled:opacity-40 disabled:cursor-default"
+            disabled={!input.trim() || streaming}
+            title="翻译(⌘↩)"
+            onClick={() => fire()}
+          >
+            <Icon n="sparkles" size={12} /> {streaming ? "翻译中…" : "翻译"}
+          </button>
         </div>
       </div>
 
@@ -329,7 +339,9 @@ function QuickApp() {
       <div className="flex-1 overflow-y-auto px-4 pt-3 pb-[74px] flex flex-col gap-2.5">
         {err && <p className="text-[#d25a5a] text-[11.5px] bg-[rgba(210,90,90,0.08)] rounded-lg px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && phase === "idle" && (
-          <p className="text-t3 text-xs mt-1.5 m-0">译文将逐块流式渲染 · 自动存入文章库 · {dirLabel(direction)}</p>
+          <p className="text-t3 text-xs mt-1.5 m-0">
+            译文将逐块流式渲染 · 自动存入文章库 · {direction === "auto" ? (input.trim() ? `识别:${dirLabel(detectDir(input))}` : "自动识别语言") : dirLabel(direction)}
+          </p>
         )}
         {blocks.length > 0 && (
           <>

@@ -53,8 +53,31 @@ function SegSelect({ seg, onSeg }: { seg: string; onSeg: (s: string) => void }) 
 
 export function DirPicker({ value, onChange }: { value: string; onChange: (d: string) => void }) {
   const [a, b] = splitDir(value);
+  if (value === "auto") {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-1 h-7 px-2 rounded-[7px] bg-accentsoft text-accent text-xs font-medium">
+          <Icon n="zap" size={12} /> 自动识别
+        </span>
+        <button
+          title="放弃自动,手动指定方向"
+          className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-0.5 hover:text-accent"
+          onClick={() => onChange("en2zh")}
+        >
+          改手动
+        </button>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1.5">
+      <button
+        title="自动识别语言:中文→英,其余→中"
+        className="flex items-center border-none bg-none text-t3 cursor-pointer p-0.5 hover:text-accent"
+        onClick={() => onChange("auto")}
+      >
+        <Icon n="zap" size={13} />
+      </button>
       <SegSelect seg={a} onSeg={(s) => onChange(makeDir(s, b))} />
       <button
         title="交换方向"
