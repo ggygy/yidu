@@ -86,6 +86,7 @@ pub fn refresh_accent(app: &AppHandle) {
 // ---------- 设置窗口(懒创建 + 关闭即隐藏) ----------
 
 pub fn show_settings(app: &AppHandle, section: Option<&str>) {
+    make_regular(app);
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -121,6 +122,7 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = w2.hide();
+                    update_dock(&app2);
                 }
                 tauri::WindowEvent::Focused(true) => refresh_accent(&app2),
                 _ => {}
@@ -177,9 +179,16 @@ pub fn install_menu(app: &AppHandle, mode: &str) -> tauri::Result<()> {
     let a_light = CheckMenuItemBuilder::with_id("m-theme-light", "浅色").checked(mode == "light").build(app)?;
     let a_dark = CheckMenuItemBuilder::with_id("m-theme-dark", "深色").checked(mode == "dark").build(app)?;
     let appearance = SubmenuBuilder::new(app, "外观").item(&a_sys).item(&a_light).item(&a_dark).build()?;
+    let zoom_in = MenuItemBuilder::with_id("m-zoom-in", "放大").accelerator("CmdOrCtrl+=").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("m-zoom-out", "缩小").accelerator("CmdOrCtrl+-").build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("m-zoom-reset", "实际大小").accelerator("CmdOrCtrl+0").build(app)?;
     let view = SubmenuBuilder::new(app, "显示")
         .item(&library)
         .item(&inspector)
+        .separator()
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .item(&zoom_reset)
         .separator()
         .item(&toggle_dark)
         .item(&appearance)
@@ -215,6 +224,14 @@ fn on_menu(app: &AppHandle, e: tauri::menu::MenuEvent) {
         "m-theme-dark" => save_theme_mode(app, "dark"),
         "m-toggle-dark" => save_theme_mode(app, if effective_dark(app) { "light" } else { "dark" }),
         "m-quick" => crate::toggle_quick(app),
+        // 字号缩放(§2.5.6):发给当前有焦点的主窗 / 快捷窗,各自记忆
+        "m-zoom-in" | "m-zoom-out" | "m-zoom-reset" => {
+            let target = ["quick", "main"]
+                .into_iter()
+                .find(|l| app.get_webview_window(l).and_then(|w| w.is_focused().ok()).unwrap_or(false))
+                .unwrap_or("main");
+            let _ = app.emit_to(target, "menu", id.trim_start_matches("m-"));
+        }
         "m-main" => crate::show_main(app, false),
         // 主窗动作:快捷窗/设置窗是 key window 时也定向到主窗(并唤出)
         "m-new" | "m-resume" | "m-library" | "m-inspector" => {
@@ -223,4 +240,109 @@ fn on_menu(app: &AppHandle, e: tauri::menu::MenuEvent) {
         }
         _ => {}
     }
+}
+
+// ---------- 快捷窗唤出(§2.4) ----------
+
+/// 快捷窗:唤出时移到当前桌面(含全屏应用之上),而不是把用户拽回它所在的桌面
+pub fn setup_quick_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Some(q) = app.get_webview_window("quick") {
+        use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+        if let Ok(ptr) = q.ns_window() {
+            // SAFETY:tauri 返回的是该窗口有效的 NSWindow 指针;setup 在主线程执行
+            let win: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+            let b = win.collectionBehavior();
+            win.setCollectionBehavior(
+                b | NSWindowCollectionBehavior::MoveToActiveSpace | NSWindowCollectionBehavior::FullScreenAuxiliary,
+            );
+        }
+    }
+    let _ = app;
+}
+
+/// Dock 图标:主窗或设置窗可见 = Regular;只剩快捷窗 = Accessory(无 Dock 图标,唤出不切桌面)
+pub fn update_dock(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let vis = |l: &str| app.get_webview_window(l).and_then(|w| w.is_visible().ok()).unwrap_or(false);
+        let regular = vis("main") || vis("settings");
+        let _ = app.set_activation_policy(if regular { tauri::ActivationPolicy::Regular } else { tauri::ActivationPolicy::Accessory });
+    }
+    let _ = app;
+}
+
+pub fn make_regular(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    let _ = app;
+}
+
+/// 各显示器上记忆的相对位置(0..1,按可用区域剩余空间的比例)
+#[derive(Default)]
+pub struct QuickPos(pub Mutex<std::collections::HashMap<String, (f64, f64)>>);
+
+const QUICK_POS_KEY: &str = "quick_pos";
+
+fn monitor_key(m: &tauri::Monitor) -> String {
+    let p = m.position();
+    format!("{}@{},{}", m.name().cloned().unwrap_or_default(), p.x, p.y)
+}
+
+pub fn load_quick_pos(app: &AppHandle) {
+    let saved = app
+        .try_state::<AppState>()
+        .and_then(|s| s.db.get_state(QUICK_POS_KEY).ok().flatten())
+        .and_then(|j| serde_json::from_str::<std::collections::HashMap<String, (f64, f64)>>(&j).ok())
+        .unwrap_or_default();
+    app.manage(QuickPos(Mutex::new(saved)));
+}
+
+/// 记下快捷窗当前位置(相对其所在显示器),隐藏时调用
+pub fn remember_quick_pos(app: &AppHandle) {
+    let Some(q) = app.get_webview_window("quick") else { return };
+    let (Ok(Some(mon)), Ok(pos), Ok(size)) = (q.current_monitor(), q.outer_position(), q.outer_size()) else { return };
+    let wa = mon.work_area();
+    let free_w = (wa.size.width as f64 - size.width as f64).max(1.0);
+    let free_h = (wa.size.height as f64 - size.height as f64).max(1.0);
+    let rel = (
+        ((pos.x - wa.position.x) as f64 / free_w).clamp(0.0, 1.0),
+        ((pos.y - wa.position.y) as f64 / free_h).clamp(0.0, 1.0),
+    );
+    if let Some(st) = app.try_state::<QuickPos>() {
+        let mut m = st.0.lock().unwrap();
+        m.insert(monitor_key(&mon), rel);
+        if let (Some(s), Ok(j)) = (app.try_state::<AppState>(), serde_json::to_string(&*m)) {
+            let _ = s.db.set_state(QUICK_POS_KEY, &j);
+        }
+    }
+}
+
+/// 唤出前定位:放到鼠标所在显示器;该屏记忆的相对位置(默认水平居中、偏上);越界夹回可用区域
+pub fn place_quick(app: &AppHandle) {
+    let Some(q) = app.get_webview_window("quick") else { return };
+    let Ok(cur) = app.cursor_position() else { return };
+    let Ok(Some(mon)) = app.monitor_from_point(cur.x, cur.y) else { return };
+    let (Ok(pos), Ok(size)) = (q.outer_position(), q.outer_size()) else { return };
+    let wa = mon.work_area();
+    let (wx, wy, ww, wh) = (wa.position.x, wa.position.y, wa.size.width as i32, wa.size.height as i32);
+    let (sw, sh) = (size.width as i32, size.height as i32);
+    // 已完整在这块屏的可用区域内:不动(尊重用户上次放的位置)
+    let inside = pos.x >= wx && pos.y >= wy && pos.x + sw <= wx + ww && pos.y + sh <= wy + wh;
+    if inside {
+        return;
+    }
+    let rel = app
+        .try_state::<QuickPos>()
+        .and_then(|st| st.0.lock().unwrap().get(&monitor_key(&mon)).copied())
+        .unwrap_or((0.5, 0.18));
+    let free_w = (ww - sw).max(0) as f64;
+    let free_h = (wh - sh).max(0) as f64;
+    let x = wx + (rel.0 * free_w).round() as i32;
+    let y = wy + (rel.1 * free_h).round() as i32;
+    // 窗比屏还高:先缩到可用高度,再放顶
+    if sh > wh {
+        let _ = q.set_size(tauri::PhysicalSize::new(size.width, wh as u32));
+    }
+    let _ = q.set_position(tauri::PhysicalPosition::new(x.max(wx), y.max(wy)));
 }

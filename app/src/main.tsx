@@ -8,7 +8,7 @@ import * as api from "./api";
 import { dirLabel, langZh, splitDir, detectDir } from "./languages";
 import { DirPicker } from "./dirselect";
 import { IS_MAC, initNative } from "./native";
-import { applyReaderStyle, loadReaderStyle, type ReaderStyle } from "./reader";
+import { applyReading, stepScale } from "./reader";
 import { ConfirmCard, Segmented, TbButton, fmtTokens } from "./ui";
 import { IDLE, LiveStatus, MetricsDetail, reduceLive, sec, startLive, type Live } from "./metrics";
 import { addUsage, EMPTY_USAGE } from "./types";
@@ -252,12 +252,6 @@ function App() {
 
   useEffect(() => { localStorage.setItem("yidu-view", view); }, [view]);
 
-  // 阅读字号 / 行距:设置窗修改后经 reader-changed 广播
-  useEffect(() => {
-    applyReaderStyle(loadReaderStyle());
-    const un = listen<ReaderStyle>("reader-changed", (e) => applyReaderStyle(e.payload));
-    return () => { un.then((f) => f()); };
-  }, []);
 
   const say = (m: string) => {
     setToast(m);
@@ -293,6 +287,14 @@ function App() {
     return () => { subs.forEach((u) => u.then((f) => f())); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 阅读字号 / 密度(prefs,三窗经 prefs-changed 同步)
+  useEffect(() => { applyReading("main", prefs?.main_scale ?? 1, prefs?.density ?? "standard"); }, [prefs?.main_scale, prefs?.density]);
+  const zoom = (dir: "zoom-in" | "zoom-out" | "zoom-reset") => {
+    const next = stepScale(prefs?.main_scale ?? 1, dir);
+    applyPrefs({ main_scale: next });
+    say(`字号 ${Math.round(next * 100)}%`);
+  };
+
   const applyPrefs = (u: Partial<Prefs>) => {
     api.setPrefs(u).then((p) => { setPrefsState(p); setDirection(p.direction); }).catch((e) => say(String(e)));
   };
@@ -305,6 +307,9 @@ function App() {
     library: () => { const open = !sideOpen; setSideOpen(open); if (open) window.setTimeout(() => searchRef.current?.focus(), 60); },
     inspector: () => setInspOpen(!inspOpen),
     cancel: () => cancelCurrent(),
+    "zoom-in": () => zoom("zoom-in"),
+    "zoom-out": () => zoom("zoom-out"),
+    "zoom-reset": () => zoom("zoom-reset"),
   };
   useEffect(() => {
     const un = listen<string>("menu", (e) => actionsRef.current[e.payload]?.());
@@ -321,7 +326,7 @@ function App() {
       if (!mod && !typing && ["1", "2", "3"].includes(e.key)) { setView(VIEWS[Number(e.key) - 1][0]); return; }
       if (!IS_MAC && mod) {
         const k = e.key.toLowerCase();
-        const map: Record<string, string> = { n: "new", k: "library", r: "resume", i: "inspector" };
+        const map: Record<string, string> = { n: "new", k: "library", r: "resume", i: "inspector", "=": "zoom-in", "+": "zoom-in", "-": "zoom-out", "0": "zoom-reset" };
         if (map[k]) { e.preventDefault(); actionsRef.current[map[k]](); return; }
         if (k === ",") { e.preventDefault(); openSettings(); return; }
       }
@@ -458,7 +463,7 @@ function App() {
   };
 
   const En = ({ text, cls }: { text: string; cls?: string }) => (
-    <div className={"en md " + (cls ?? "text-[14.5px] leading-[1.7]")}><Md text={text} onWord={(w, x, y) => setVocab({ word: w, x, y, sentence: text })} /></div>
+    <div className={"en md " + (cls ?? "text-[length:var(--en-size)] leading-[var(--en-line)]")}><Md text={text} onWord={(w, x, y) => setVocab({ word: w, x, y, sentence: text })} /></div>
   );
   const glossaryHits: TermHit[] = useMemo(() => glossary.filter((g) => g.enabled).map((g) => ({ from: g.term, to: g.translation })), [glossary]);
   const Zh = ({ b }: { b: Block }) =>
@@ -547,7 +552,7 @@ function App() {
         {/* 文档区:实底 */}
         <main className="relative min-w-0 min-h-0 bg-doc">
           <div className="doc absolute inset-0 overflow-y-auto">
-            <div className={"max-w-[760px] mx-auto px-10 pt-8 pb-24 flex flex-col " + (view === "zh" ? "gap-3" : "gap-6")}>
+            <div className={"max-w-[760px] mx-auto px-10 pt-8 pb-24 flex flex-col " + (view === "zh" ? "gap-[calc(var(--pair-gap)*0.5)]" : "gap-[var(--pair-gap)]")}>
               {!doc && (
                 <div className="flex flex-col items-center justify-center min-h-[60vh] gap-2 text-center">
                   <div className="w-14 h-14 rounded-[14px] grid place-items-center text-[26px] font-bold text-white mb-2 shadow-[0_6px_18px_color-mix(in_srgb,var(--accent)_35%,transparent)]" style={{ background: "linear-gradient(145deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent))" }}>译</div>

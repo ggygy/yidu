@@ -343,6 +343,7 @@ impl BatchCtx<'_> {
             reasoning_tokens: stats.reasoning_tokens,
             batch_blocks: items.len() as i64,
             batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
+            model: self.provider_row.model.clone(),
         });
         {
             let mut g = self.meter.lock().unwrap();

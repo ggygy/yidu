@@ -8,10 +8,10 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import * as api from "../api";
 import { DirPicker } from "../dirselect";
 import { initNative } from "../native";
-import { applyReaderStyle, loadReaderStyle, RS_DEFAULT, type ReaderStyle } from "../reader";
+import { SCALE_MAX, SCALE_MIN, stepScale } from "../reader";
 import { Group, Row, Segmented, Toggle, fmtTokens, prettyAccel } from "../ui";
 import { ModelsSection } from "./models";
-import type { HotkeyStatus, Prefs, Provider, UsageSummary } from "../types";
+import type { HotkeyStatus, Prefs, Provider, UsageReport } from "../types";
 import "../styles.css";
 
 initNative();
@@ -126,9 +126,7 @@ function SettingsApp() {
 
 function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPrefs: (u: Partial<Prefs>) => void; say: (m: string) => void }) {
   const [promptDraft, setPromptDraft] = useState("");
-  const [rs, setRsState] = useState<ReaderStyle>(loadReaderStyle);
   useEffect(() => { setPromptDraft(prefs?.custom_prompt ?? ""); }, [prefs?.custom_prompt]);
-  const setRs = (v: ReaderStyle) => { setRsState(v); applyReaderStyle(v); emit("reader-changed", v).catch(() => {}); };
 
   return (
     <>
@@ -151,7 +149,7 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
           />
         </div>
       </Group>
-      <Group title="外观与阅读" foot="外观也可在菜单「显示 › 外观」切换,⌘L 在浅色与深色之间切换。">
+      <Group title="外观与阅读" foot="字号也可在阅读时用 ⌘+ / ⌘− / ⌘0 调整,主窗与快捷窗各自记忆。外观可在菜单「显示 › 外观」切换,⌘L 在浅色与深色之间切换。">
         <Row label="外观">
           <Segmented
             value={prefs?.theme_mode ?? "system"}
@@ -159,13 +157,11 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
             onChange={(m) => applyPrefs({ theme_mode: m })}
           />
         </Row>
-        <Row label={<>译文字号 <b className="text-t3 font-normal ml-1">{rs.size}px</b></>}>
-          <input className="w-[160px]" type="range" min={14} max={22} step={1} value={rs.size} onChange={(e) => setRs({ ...rs, size: Number(e.target.value) })} />
+        <Row label="主窗字号"><ScaleStepper value={prefs?.main_scale ?? 1} onChange={(v) => applyPrefs({ main_scale: v })} /></Row>
+        <Row label="快捷窗字号"><ScaleStepper value={prefs?.quick_scale ?? 1} onChange={(v) => applyPrefs({ quick_scale: v })} /></Row>
+        <Row label="排版密度">
+          <Segmented value={prefs?.density ?? "standard"} options={[["compact", "紧凑"], ["standard", "标准"], ["loose", "宽松"]] as const} onChange={(d) => applyPrefs({ density: d })} />
         </Row>
-        <Row label={<>行距 <b className="text-t3 font-normal ml-1">{rs.lineH.toFixed(2)}</b></>}>
-          <input className="w-[160px]" type="range" min={1.5} max={2.2} step={0.05} value={rs.lineH} onChange={(e) => setRs({ ...rs, lineH: Number(e.target.value) })} />
-        </Row>
-        <Row label=""><button className="btn" onClick={() => setRs(RS_DEFAULT)}>恢复默认</button></Row>
       </Group>
     </>
   );
@@ -189,14 +185,16 @@ function QuickSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
       e.preventDefault(); e.stopPropagation();
       if (e.key === "Escape") { setCapturing(false); return; }
       const parts: string[] = [];
-      if (e.metaKey || e.ctrlKey) parts.push("CommandOrControl");
+      if (e.metaKey) parts.push("CommandOrControl");
+      if (e.ctrlKey) parts.push("Control");
       if (e.altKey) parts.push("Alt");
       if (e.shiftKey) parts.push("Shift");
-      const k = e.key;
-      if (/^[a-zA-Z]$/.test(k)) parts.push(k.toUpperCase());
-      else if (/^[0-9]$/.test(k)) parts.push(k);
-      else if (/^F[0-9]+$/.test(k)) parts.push(k);
-      else return;
+      // e.code 不受 ⌥ 组合出的特殊字符影响(⌥T 的 e.key 是「†」)
+      const c = e.code;
+      const k = /^Key[A-Z]$/.test(c) ? c.slice(3) : /^Digit[0-9]$/.test(c) ? c.slice(5) : /^F[0-9]+$/.test(c) ? c : "";
+      if (!k) return; // 仅修饰键,继续等
+      if (!e.metaKey && !e.ctrlKey && !e.altKey) { say("快捷键须包含 ⌘ / ⌥ / ⌃ 之一"); return; }
+      parts.push(k);
       const combo = parts.join("+");
       setCapturing(false);
       Promise.resolve(applyPrefs({ hotkey: combo })).then(() => say(`热键已改为 ${prettyAccel(combo)}`));
@@ -223,33 +221,106 @@ function QuickSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
   );
 }
 
-// ---------- 用量 ----------
+// ---------- 用量(§2.6.7) ----------
+
+function ttftCls(ms: number | null) {
+  if (ms == null) return "text-t3";
+  return ms < 1000 ? "text-ok" : ms <= 3000 ? "text-[#c88a00] dark:text-[#ffd60a]" : "text-danger";
+}
+const s1 = (ms: number | null) => (ms == null ? "—" : `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)}s`);
 
 function UsageSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPrefs: (u: Partial<Prefs>) => void; say: (m: string) => void }) {
-  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [rep, setRep] = useState<UsageReport | null>(null);
   const [price, setPrice] = useState("");
-  useEffect(() => { api.usageSummary().then(setUsage).catch(() => {}); }, []);
+  useEffect(() => {
+    const d = new Date();
+    const monthStart = Math.floor(new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000);
+    api.usageReport(monthStart).then(setRep).catch((e) => say(String(e)));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPrice(prefs?.price_per_mtok ? String(prefs.price_per_mtok) : ""); }, [prefs?.price_per_mtok]);
-  const cost = usage && prefs?.price_per_mtok ? (((usage.prompt_tokens + usage.completion_tokens) / 1_000_000) * prefs.price_per_mtok).toFixed(3) : null;
+  const p = prefs?.price_per_mtok ?? 0;
+  const cost = rep && p ? ((rep.month_prompt + rep.month_completion) / 1_000_000) * p : null;
   const savePrice = () => {
     const v = parseFloat(price);
     applyPrefs({ price_per_mtok: isNaN(v) ? 0 : v });
     say(isNaN(v) ? "单价已清空" : "单价已保存");
   };
+  const fmtTime = (t: number) => {
+    const d = new Date(t * 1000);
+    const today = d.toDateString() === new Date().toDateString();
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return today ? hm : `${d.getMonth() + 1}-${d.getDate()} ${hm}`;
+  };
   return (
     <>
-      <Group title="累计" foot="首字耗时、各模型对比与最近请求明细将在后续版本加入。">
-        <Row label="请求">{usage ? `${usage.requests} 次` : "—"}</Row>
-        <Row label="输入 tokens">{usage ? fmtTokens(usage.prompt_tokens) : "—"}</Row>
-        <Row label="输出 tokens">{usage ? fmtTokens(usage.completion_tokens) : "—"}</Row>
-        <Row label="估算成本">{cost ? `≈ ¥${cost}` : "填写单价后显示"}</Row>
+      <div className="grid grid-cols-3 gap-2.5 mb-4">
+        {[
+          ["本月请求", rep ? `${rep.month_requests}` : "—"],
+          ["本月 tokens", rep ? fmtTokens(rep.month_prompt + rep.month_completion) : "—"],
+          ["估算成本", cost != null ? `¥${cost < 0.1 ? cost.toFixed(3) : cost.toFixed(2)}` : "填单价后显示"],
+        ].map(([k, v]) => (
+          <div key={k} className="gl px-3.5 py-3">
+            <div className="text-[11px] text-t3">{k}</div>
+            <div className="text-[20px] font-semibold tabular-nums mt-0.5 truncate">{v}</div>
+          </div>
+        ))}
+      </div>
+      {rep && rep.month_reasoning > 0 && (
+        <p className="gf !px-1 !pt-0 -mt-2 mb-3">本月输出中有 {fmtTokens(rep.month_reasoning)} tokens 是思考({Math.round((rep.month_reasoning / Math.max(1, rep.month_completion)) * 100)}%)。</p>
+      )}
+
+      <Group title="各模型首字(最近 20 次中位数)" foot="首字 < 1s 快 · 1–3s 一般 · > 3s 慢。">
+        {rep?.models.length ? rep.models.map((m) => (
+          <Row key={m.model} label={<span className="font-code text-[12px]">{m.model}</span>}>
+            <span className={"tabular-nums font-medium " + ttftCls(m.ttft_median_ms)}>首字 {s1(m.ttft_median_ms)}</span>
+            <span className="tabular-nums">总 {s1(m.total_median_ms)}</span>
+            <span className="text-[11px]">{m.samples} 次</span>
+          </Row>
+        )) : <Row label={<span className="text-t3">还没有翻译记录</span>} />}
       </Group>
-      <Group title="单价">
+
+      <section className="mb-4">
+        <div className="gh">最近 20 次请求</div>
+        <div className="gl overflow-hidden">
+          <table className="w-full text-[12px] tabular-nums border-collapse">
+            <thead>
+              <tr className="text-t3 text-[11px] text-left">
+                {["时间", "模型", "首字", "总耗时", "输入 / 输出", "思考"].map((h, i) => <th key={h} className={"font-medium px-3 py-2 " + (i >= 2 ? "text-right" : "")}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rep?.recent.map((r, i) => (
+                <tr key={i} className="border-t-[0.5px] border-line">
+                  <td className="px-3 py-1.5 text-t2 whitespace-nowrap">{fmtTime(r.created_at)}</td>
+                  <td className="px-3 py-1.5 font-code text-[11px] truncate max-w-[140px]" title={r.provider}>{r.model || "—"}</td>
+                  <td className={"px-3 py-1.5 text-right font-medium " + ttftCls(r.ttft_ms)}>{s1(r.ttft_ms)}</td>
+                  <td className="px-3 py-1.5 text-right text-t2">{s1(r.latency_ms)}</td>
+                  <td className="px-3 py-1.5 text-right text-t2 whitespace-nowrap">{r.prompt_tokens} / {r.completion_tokens}</td>
+                  <td className="px-3 py-1.5 text-right text-t3">{r.reasoning_tokens || "—"}</td>
+                </tr>
+              ))}
+              {rep && !rep.recent.length && <tr><td colSpan={6} className="px-3 py-3 text-t3">还没有翻译记录</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <Group title="单价" foot="按输入 + 输出合计估算;不同模型单价不同时填一个平均值即可。">
         <Row label="每 100 万 tokens(¥)">
           <input className="field w-[100px] text-right" placeholder="0" value={price} onChange={(e) => setPrice(e.target.value)} onBlur={savePrice} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
         </Row>
       </Group>
     </>
+  );
+}
+
+function ScaleStepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button className="btn !px-2" disabled={value <= SCALE_MIN} onClick={() => onChange(stepScale(value, "zoom-out"))}>−</button>
+      <button className="btn !px-2 min-w-[52px] justify-center tabular-nums" title="恢复 100%" onClick={() => onChange(1)}>{Math.round(value * 100)}%</button>
+      <button className="btn !px-2" disabled={value >= SCALE_MAX} onClick={() => onChange(stepScale(value, "zoom-in"))}>＋</button>
+    </span>
   );
 }
 

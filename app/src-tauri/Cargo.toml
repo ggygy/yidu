@@ -32,4 +32,4 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 # v0.3 §2.7:读系统强调色 NSColor.controlAccentColor(tauri 已传递依赖同版本,不新增下载)
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSColor", "NSColorSpace"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSColor", "NSColorSpace", "NSWindow", "NSResponder"] }

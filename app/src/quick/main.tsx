@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit, listen } from "@tauri-apps/api/event";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
@@ -9,10 +9,11 @@ import { Icon } from "../icons";
 import * as api from "../api";
 import { dirLabel, dirShort, detectDir } from "../languages";
 import { DirPicker } from "../dirselect";
-import { initNative } from "../native";
+import { IS_MAC, initNative } from "../native";
 import { Segmented, TbButton } from "../ui";
 import { IDLE, LiveStatus, MetricsDetail, metricsLine, reduceLive, sec, startLive, type Live } from "../metrics";
 import { cachedModels, fetchModels, testState } from "../providers";
+import { applyReading, stepScale } from "../reader";
 import { addUsage, EMPTY_USAGE } from "../types";
 import type { Block, Prefs, Provider, SessionUsage, StreamEvent } from "../types";
 import "../styles.css";
@@ -50,6 +51,10 @@ function QuickApp() {
   const [view, setView] = useState<QView>("zh");
   const [sideBySide, setSideBySide] = useLocalFlag("q-pair-cols", true); // 对照:左右两栏 / 上下
   const [live, setLive] = useState<Live>(IDLE); // 阶段 / 计时 / 结束明细
+  const [srcOpen, setSrcOpen] = useState(true); // 有结果后源文收成一行;点开恢复
+  const autoGrowRef = useRef(true); // 用户手拖高度 → 本次暂停自动长高
+  const docRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [lastSrc, setLastSrc] = useState(""); // 上次翻译的原文:输入改了才把主按钮切回「翻译」
   const [expandProv, setExpandProv] = useState<number | null>(null); // 模型菜单里展开的服务商
@@ -79,6 +84,22 @@ function QuickApp() {
     return () => { un1.then((f) => f()); un2.then((f) => f()); };
   }, []);
 
+  // 字号 / 密度(prefs.quick_scale / density)
+  useEffect(() => { applyReading("quick", prefs?.quick_scale ?? 1, prefs?.density ?? "standard"); }, [prefs?.quick_scale, prefs?.density]);
+  const zoom = (dir: "zoom-in" | "zoom-out" | "zoom-reset") => {
+    const next = stepScale(prefs?.quick_scale ?? 1, dir);
+    savePrefs({ quick_scale: next }).catch(() => {});
+    say(`字号 ${Math.round(next * 100)}%`);
+  };
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  useEffect(() => {
+    const un = listen<string>("menu", (e) => {
+      if (e.payload === "zoom-in" || e.payload === "zoom-out" || e.payload === "zoom-reset") zoomRef.current(e.payload);
+    });
+    return () => { un.then((f) => f()); };
+  }, []);
+
   // pin 置顶(默认开)
   useEffect(() => { if (w) safe(() => w.setAlwaysOnTop(pin)); }, [pin]);
 
@@ -86,15 +107,21 @@ function QuickApp() {
   useEffect(() => {
     if (!w) return;
     const un = w.onFocusChanged(({ payload: focused }) => {
-      if (!focused && hideOnBlur && !pin) safe(() => w.hide());
+      // 唤出后 300ms 内不触发(激活过程中可能先收到一次失焦,会把刚唤出的窗口立刻藏起来)
+      if (!focused && hideOnBlur && !pin && Date.now() - shownAtRef.current > 300) safe(() => w.hide());
     });
     return () => { un.then((f) => f()); };
   }, [hideOnBlur, pin]);
 
   // 唤出事件(Rust toggle_quick 发来):新剪贴板内容预填「假划词」;监听只挂一次,经 ref 取最新闭包
   const shownRef = useRef<(t: string) => void>(() => {});
+  const shownAtRef = useRef(0);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     const un = listen("quick-shown", async () => {
+      shownAtRef.current = Date.now();
+      autoGrowRef.current = true; // 每次唤出恢复自动长高
+      window.setTimeout(() => inputRef.current?.focus(), 30);
       try {
         const t = await readText();
         if (t && t.trim() && clipHash(t) !== localStorage.getItem("q-last-clip")) {
@@ -126,6 +153,8 @@ function QuickApp() {
 
   const fire = async (text = input) => {
     if (!text.trim()) return;
+    autoGrowRef.current = true; // 新翻译恢复自动长高
+    setSrcOpen(false);
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
     setPhase("streaming");
     setErr(null);
@@ -199,7 +228,7 @@ function QuickApp() {
     setPin(next);
   };
 
-  const clear = () => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); setLive(IDLE); setLastSrc(""); };
+  const clear = () => { setSrcOpen(true); setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); setLive(IDLE); setLastSrc(""); };
   const streaming = phase === "streaming";
 
   // 下拉点外部关闭
@@ -214,6 +243,12 @@ function QuickApp() {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); setView((v) => (v === "pair" ? "zh" : "pair")); return; }
+      // macOS 由菜单「显示 › 放大 / 缩小 / 实际大小」承担;其他平台走 JS
+      if (!IS_MAC && (e.metaKey || e.ctrlKey) && ["=", "+", "-", "0"].includes(e.key)) {
+        e.preventDefault();
+        zoomRef.current(e.key === "-" ? "zoom-out" : e.key === "0" ? "zoom-reset" : "zoom-in");
+        return;
+      }
       if (e.key !== "Escape") return;
       if (dirOpen || provOpen) { setDirOpen(false); setProvOpen(false); return; }
       if (phase === "streaming") cancel();
@@ -229,6 +264,74 @@ function QuickApp() {
     ? input.trim() ? (() => { const [a, b] = dirLabel(detectDir(input)).split(" → "); return `自动(${a})→ ${b}`; })() : "自动识别"
     : dirShort(direction);
 
+  // ---------- 自动长高(§2.5.1–3) ----------
+  // 宽不动;高随内容(含流式)增长,220ms ease-out,上限 85% 屏高后内部滚动;清空缩回。
+  // 下方放不下就整体上移;用户手拖高度 → 暂停到下次唤出 / 新翻译。
+  const animUntil = useRef(0);
+  const fitTimer = useRef(0);
+  const fitting = useRef(false);
+  const fit = async () => {
+    if (!w || !autoGrowRef.current || fitting.current) return;
+    const doc = docRef.current, content = contentRef.current;
+    if (!doc || !content) return;
+    fitting.current = true;
+    try {
+      const mon = await currentMonitor();
+      const sf = mon?.scaleFactor ?? 1;
+      const area = mon?.workArea ?? (mon ? { position: mon.position, size: mon.size } : null);
+      const maxH = area ? (area.size.height / sf) * 0.85 : 900;
+      const chrome = window.innerHeight - doc.clientHeight;
+      const padY = 28;
+      const hasContent = blocks.length > 0 || !!err;
+      const want = chrome + (hasContent ? content.scrollHeight + padY : 96);
+      const target = Math.round(Math.min(maxH, Math.max(hasContent ? 260 : 0, want)));
+      const from = window.innerHeight;
+      if (Math.abs(target - from) < 4) return;
+      animUntil.current = Date.now() + 500;
+      const t0 = performance.now();
+      const width = window.innerWidth;
+      for (;;) {
+        const k = Math.min(1, (performance.now() - t0) / 220);
+        const e = 1 - Math.pow(1 - k, 3); // ease-out
+        await w.setSize(new LogicalSize(width, Math.round(from + (target - from) * e)));
+        if (k >= 1) break;
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+      }
+      // 下方超出可用区域 → 整体上移,始终完整可见
+      if (area) {
+        const pos = await w.outerPosition();
+        const size = await w.outerSize();
+        const bottom = area.position.y + area.size.height;
+        if (pos.y + size.height > bottom) {
+          await w.setPosition(new PhysicalPosition(pos.x, Math.max(area.position.y, bottom - size.height)));
+        }
+      }
+      animUntil.current = Date.now() + 150;
+    } catch { /* 浏览器预览无窗口 */ } finally {
+      fitting.current = false;
+    }
+  };
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  const scheduleFit = () => {
+    window.clearTimeout(fitTimer.current);
+    fitTimer.current = window.setTimeout(() => fitRef.current(), 60);
+  };
+  useEffect(() => {
+    const c = contentRef.current;
+    if (!c) return;
+    const ro = new ResizeObserver(scheduleFit);
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { scheduleFit(); }, [blocks.length, err, srcOpen, view]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 非本程序引起的尺寸变化 = 用户手拖
+  useEffect(() => {
+    if (!w) return;
+    const un = w.onResized(() => { if (Date.now() > animUntil.current && !fitting.current) autoGrowRef.current = false; });
+    return () => { un.then((f) => f()); };
+  }, []);
+
   // 单块渲染:译文 / 原文 / 对照(窄宽对照 = 每块上原文下译文)
   const zhOf = (b: Block) =>
     b.trans ? (
@@ -236,7 +339,7 @@ function QuickApp() {
     ) : (
       <p className="zh m-0 text-t3">{streaming ? <span className="caret" /> : "待译"}</p>
     );
-  const enOf = (b: Block, size: string) => <div className={"en md leading-[1.7] " + size}><Md text={b.src} /></div>;
+  const enOf = (b: Block, extra = "") => <div className={"en md text-[length:var(--en-size)] leading-[var(--en-line)] " + extra}><Md text={b.src} /></div>;
 
   return (
     <div className="relative flex flex-col h-screen overflow-hidden mat">
@@ -319,9 +422,21 @@ function QuickApp() {
         </div>
       </div>
 
-      {/* 源文 */}
+      {/* 源文:有结果后收成一行「原文 · …」,点击展开(§2.5.4) */}
+      {blocks.length > 0 && !srcOpen ? (
+        <button
+          className="mx-3 mt-2.5 h-[30px] rounded-[10px] bg-ctl shadow-[0_0_0_0.5px_var(--border)] px-3 flex items-center gap-2 text-left border-none flex-none min-w-0"
+          title="展开原文"
+          onClick={() => { setSrcOpen(true); window.setTimeout(() => inputRef.current?.focus(), 30); }}
+        >
+          <span className="text-[11px] text-t3 flex-none">原文</span>
+          <span className="text-[12px] text-t2 truncate min-w-0">{input.replace(/\s+/g, " ").trim()}</span>
+          <Icon n="chev" size={11} className="ml-auto flex-none text-t3" />
+        </button>
+      ) : (
       <div className="mx-3 mt-2.5 rounded-[10px] bg-ctl shadow-[0_0_0_0.5px_var(--border)] px-3 py-2 flex-none focus-within:bg-doc focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)] transition-[background-color,box-shadow] duration-150">
         <textarea
+          ref={inputRef}
           className="w-full h-[64px] border-none outline-none resize-none bg-transparent text-[13px] leading-[1.5] text-t1 placeholder:text-t3"
           value={input}
           placeholder={providers.length ? "粘贴或输入要翻译的文本" : "先配置一个翻译模型 →「管理模型…」"}
@@ -338,6 +453,7 @@ function QuickApp() {
           }}
         />
       </div>
+      )}
 
       {/* 未配置引导 */}
       {(!providers.length || !active) && (
@@ -347,7 +463,8 @@ function QuickApp() {
       )}
 
       {/* 译文区:文档实底 */}
-      <div className="doc flex-1 min-h-0 mx-2.5 mt-2.5 rounded-[10px] bg-doc shadow-[0_0_0_0.5px_var(--border)] overflow-y-auto px-4 py-3.5 flex flex-col gap-3 [--zh-size:15px] [--zh-line:1.75]">
+      <div ref={docRef} className="doc flex-1 min-h-0 mx-2.5 mt-2.5 rounded-[10px] bg-doc shadow-[0_0_0_0.5px_var(--border)] overflow-y-auto px-4 py-3.5">
+       <div ref={contentRef} className="flex flex-col gap-[var(--pair-gap)]">
         {err && <p className="text-danger text-[12px] bg-surface2 rounded-md px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && (
           <p className="text-t3 text-[12px] m-0">
@@ -358,15 +475,16 @@ function QuickApp() {
           b.kind === "code" ? (
             <CodeBox key={b.idx} src={b.src} />
           ) : view === "src" ? (
-            <div key={b.idx}>{enOf(b, "text-[14px]")}</div>
+            <div key={b.idx}>{enOf(b)}</div>
           ) : view === "pair" ? (
             sideBySide
-              ? <div key={b.idx} className="grid grid-cols-2 gap-x-4 items-start">{enOf(b, "text-[13.5px] min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(b)}</div></div>
-              : <div key={b.idx} className="flex flex-col gap-1">{enOf(b, "text-[13.5px]")}{zhOf(b)}</div>
+              ? <div key={b.idx} className="grid grid-cols-2 gap-x-4 items-start">{enOf(b, "min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(b)}</div></div>
+              : <div key={b.idx} className="flex flex-col gap-1">{enOf(b)}{zhOf(b)}</div>
           ) : (
             <div key={b.idx}>{zhOf(b)}</div>
           ),
         )}
+       </div>
       </div>
 
       {/* 状态栏:进行中 = 阶段 + 计时;结束 = 首字 · 总耗时 · 输出 tok ⓘ */}

@@ -99,6 +99,10 @@ export function openSettings(section?: string): Promise<void> {
   return invoke("open_settings", { section: section ?? null });
 }
 
+export function usageReport(monthStart: number): Promise<import("./types").UsageReport> {
+  return invoke("usage_report", { monthStart });
+}
+
 export function usageSummary(): Promise<UsageSummary> {
   return invoke<UsageSummary>("usage_summary");
 }

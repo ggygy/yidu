@@ -1,34 +1,35 @@
-// 阅读外观:v0.3 起视觉(主题 / 字体 / 强调色 / 底色)由 §2.7 原生视觉接管,只保留译文字号与行高
-// 主窗/设置窗共用(localStorage 同源共享 + "reader-changed" 事件广播);M3 将改为 ⌘± 与密度三档
+// 阅读排版(v0.3 §2.5.6):字号 = 基准 × 缩放(⌘+ / ⌘− / ⌘0,0.8–1.5,快捷窗与主窗各自记忆,存 prefs)
+// + 密度三档(紧凑 / 标准 / 宽松)。主题 / 字体 / 底色 / 强调色已由原生视觉(§2.7)接管。
+import type { Prefs } from "./types";
 
-export type ReaderStyle = {
-  size: number;  // 主窗译文字号 px(默认 17,阶梯 reading)
-  lineH: number; // 主窗译文行高
+export type Density = Prefs["density"];
+export type ScaleKind = "quick" | "main";
+
+// 基准字号(research/12 字号阶梯):快捷窗译文 15、主窗译文 17、对照原文 14.5
+const BASE = { quick: { zh: 15, en: 13.5 }, main: { zh: 17, en: 14.5 } };
+const DENSITY: Record<Density, { line: number; enLine: number; gap: number }> = {
+  compact: { line: 1.6, enLine: 1.55, gap: 0.65 },
+  standard: { line: 1.8, enLine: 1.7, gap: 1 },
+  loose: { line: 2.0, enLine: 1.85, gap: 1.4 },
 };
 
-export const RS_DEFAULT: ReaderStyle = { size: 17, lineH: 1.85 };
+export const SCALE_MIN = 0.8;
+export const SCALE_MAX = 1.5;
 
-export function applyReaderStyle(rs: ReaderStyle) {
-  const r = document.documentElement.style;
-  r.setProperty("--zh-size", `${rs.size}px`);
-  r.setProperty("--zh-line", String(rs.lineH));
-  try { localStorage.setItem("yidu-reader", JSON.stringify(rs)); } catch { /* 隐私模式 */ }
+export function stepScale(cur: number, dir: "zoom-in" | "zoom-out" | "zoom-reset"): number {
+  if (dir === "zoom-reset") return 1;
+  const next = Math.round((cur + (dir === "zoom-in" ? 0.1 : -0.1)) * 10) / 10;
+  return Math.min(SCALE_MAX, Math.max(SCALE_MIN, next));
 }
 
-// v0.3 迁移:旧版字号阶梯以 16 为默认、含主题/字体字段 → 一次性回到新默认
-const RS_MIGRATED = "yidu-reader-v03b";
-
-export function loadReaderStyle(): ReaderStyle {
-  try {
-    if (localStorage.getItem(RS_MIGRATED) !== "1") {
-      localStorage.setItem(RS_MIGRATED, "1");
-      localStorage.removeItem("yidu-reader-v03");
-      return RS_DEFAULT;
-    }
-    const v = JSON.parse(localStorage.getItem("yidu-reader") || "{}");
-    return {
-      size: typeof v.size === "number" ? Math.min(24, Math.max(13, v.size)) : RS_DEFAULT.size,
-      lineH: typeof v.lineH === "number" ? Math.min(2.2, Math.max(1.5, v.lineH)) : RS_DEFAULT.lineH,
-    };
-  } catch { return RS_DEFAULT; }
+/** 把字号 / 行高 / 块距写到 CSS 变量(--zh-size / --zh-line / --en-size / --en-line / --pair-gap) */
+export function applyReading(kind: ScaleKind, scale: number, density: Density) {
+  const r = document.documentElement.style;
+  const d = DENSITY[density] ?? DENSITY.standard;
+  const b = BASE[kind];
+  r.setProperty("--zh-size", `${(b.zh * scale).toFixed(1)}px`);
+  r.setProperty("--en-size", `${(b.en * scale).toFixed(1)}px`);
+  r.setProperty("--zh-line", String(d.line));
+  r.setProperty("--en-line", String(d.enLine));
+  r.setProperty("--pair-gap", `${Math.round((kind === "main" ? 24 : 12) * d.gap * Math.max(1, scale))}px`);
 }

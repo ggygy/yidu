@@ -105,6 +105,9 @@ export interface Prefs {
   price_per_mtok: number;
   custom_prompt: string | null; // null = 用内置默认(英文)
   theme_mode: "system" | "light" | "dark"; // v0.3:外观三态(Rust set_theme 权威)
+  quick_scale: number; // 0.8–1.5,⌘± / ⌘0(快捷窗)
+  main_scale: number;  // 0.8–1.5(主窗)
+  density: "compact" | "standard" | "loose";
 }
 
 export interface DictSense {
@@ -161,4 +164,25 @@ export interface ProviderForm {
   model: string;
   key?: string | null;
   extra?: string | null;
+}
+
+/** 用量页(§2.6.7) */
+export interface UsageRow {
+  created_at: number;
+  model: string;
+  provider: string;
+  ttft_ms: number | null;
+  latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  reasoning_tokens: number;
+}
+
+export interface UsageReport {
+  month_requests: number;
+  month_prompt: number;
+  month_completion: number;
+  month_reasoning: number;
+  models: { model: string; samples: number; ttft_median_ms: number | null; total_median_ms: number }[];
+  recent: UsageRow[];
 }

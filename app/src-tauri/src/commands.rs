@@ -285,6 +285,9 @@ pub struct PrefsStored {
     pub price_per_mtok: Option<f64>, // 每 1M tokens 人民币
     pub custom_prompt: Option<String>, // 翻译风格 prompt;空串 = 用默认
     pub theme_mode: Option<String>,    // v0.3:外观三态 system | light | dark(替代 localStorage v3-dark)
+    pub quick_scale: Option<f64>,      // v0.3 §2.5.6:快捷窗译文缩放 0.8–1.5(⌘± / ⌘0)
+    pub main_scale: Option<f64>,       // 主窗译文缩放
+    pub density: Option<String>,       // compact | standard | loose
 }
 
 #[derive(Serialize, Clone)]
@@ -298,6 +301,9 @@ pub struct PrefsEffective {
     pub price_per_mtok: f64,
     pub custom_prompt: Option<String>, // None = 用内置默认 prompt
     pub theme_mode: String,
+    pub quick_scale: f64,
+    pub main_scale: f64,
+    pub density: String,
 }
 
 pub fn load_prefs(db: &crate::db::Db) -> Result<PrefsStored, String> {
@@ -306,6 +312,11 @@ pub fn load_prefs(db: &crate::db::Db) -> Result<PrefsStored, String> {
         Ok(None) => Ok(PrefsStored::default()),
         Err(e) => Err(err(e)),
     }
+}
+
+fn clamp_scale(v: Option<f64>) -> f64 {
+    let v = v.unwrap_or(1.0);
+    if v.is_finite() { (v * 10.0).round() / 10.0 } else { 1.0 }.clamp(0.8, 1.5)
 }
 
 pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
@@ -327,6 +338,12 @@ pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
         theme_mode: match p.theme_mode.as_deref() {
             Some(m @ ("light" | "dark")) => m.to_string(),
             _ => "system".into(),
+        },
+        quick_scale: clamp_scale(p.quick_scale),
+        main_scale: clamp_scale(p.main_scale),
+        density: match p.density.as_deref() {
+            Some(d @ ("compact" | "loose")) => d.to_string(),
+            _ => "standard".into(),
         },
     }
 }
@@ -376,6 +393,15 @@ pub fn apply_prefs_update(app: &tauri::AppHandle, state: &AppState, update: Pref
     }
     if let Some(v) = &update.theme_mode {
         stored.theme_mode = Some(v.clone());
+    }
+    if update.quick_scale.is_some() {
+        stored.quick_scale = update.quick_scale;
+    }
+    if update.main_scale.is_some() {
+        stored.main_scale = update.main_scale;
+    }
+    if let Some(v) = &update.density {
+        stored.density = Some(v.clone());
     }
     // 热键变更:Rust 侧重注册
     let new_hotkey = effective_prefs(&stored).hotkey;
@@ -471,6 +497,72 @@ pub struct UsageSummary {
 pub fn usage_summary(state: State<AppState>) -> Result<UsageSummary, String> {
     let (requests, prompt_tokens, completion_tokens) = state.db.usage_summary().map_err(err)?;
     Ok(UsageSummary { requests, prompt_tokens, completion_tokens })
+}
+
+/// 用量页(§2.6.7):本月汇总 + 最近 20 次请求 + 各模型首字中位数(最近 20 次)
+#[derive(Serialize)]
+pub struct UsageReport {
+    pub month_requests: i64,
+    pub month_prompt: i64,
+    pub month_completion: i64,
+    pub month_reasoning: i64,
+    pub models: Vec<ModelStat>,
+    pub recent: Vec<crate::db::UsageRow>,
+}
+
+#[derive(Serialize)]
+pub struct ModelStat {
+    pub model: String,
+    pub samples: usize,
+    pub ttft_median_ms: Option<i64>,
+    pub total_median_ms: i64,
+}
+
+fn median(mut v: Vec<i64>) -> Option<i64> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable();
+    let n = v.len();
+    Some(if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2 })
+}
+
+/// month_start:本地时区本月 1 日 0 点的 unix 秒(前端算)
+#[tauri::command]
+pub async fn usage_report(state: State<'_, AppState>, month_start: i64) -> Result<UsageReport, String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (month_requests, month_prompt, month_completion, month_reasoning) = db.usage_since(month_start).map_err(err)?;
+        let pool = db.usage_recent(400).map_err(err)?;
+        let mut order: Vec<String> = Vec::new();
+        let mut by: std::collections::HashMap<String, Vec<&crate::db::UsageRow>> = Default::default();
+        for r in &pool {
+            let key = if r.model.is_empty() { "(未知)".to_string() } else { r.model.clone() };
+            let e = by.entry(key.clone()).or_default();
+            if e.is_empty() {
+                order.push(key);
+            }
+            if e.len() < 20 {
+                e.push(r);
+            }
+        }
+        let models = order
+            .into_iter()
+            .map(|m| {
+                let rows = &by[&m];
+                ModelStat {
+                    samples: rows.len(),
+                    ttft_median_ms: median(rows.iter().filter_map(|r| r.ttft_ms).collect()),
+                    total_median_ms: median(rows.iter().map(|r| r.latency_ms).collect()).unwrap_or(0),
+                    model: m,
+                }
+            })
+            .collect();
+        let recent = pool.into_iter().take(20).collect();
+        Ok(UsageReport { month_requests, month_prompt, month_completion, month_reasoning, models, recent })
+    })
+    .await
+    .map_err(err)?
 }
 
 // ---------- 热键状态 ----------
