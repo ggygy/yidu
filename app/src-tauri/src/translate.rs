@@ -401,6 +401,10 @@ impl BatchCtx<'_> {
         if stats.thinking_unsupported {
             let _ = self.db.mark_provider_thinking_unsupported(self.provider_row.id);
         }
+        // 被取消 / 什么都没产出的请求(粘贴即译时新粘贴顶替旧会话)不入用量表,免得拉低请求数与首字中位数
+        if stats.prompt_tokens == 0 && stats.completion_tokens == 0 && stats.first_content_ms.is_none() {
+            return;
+        }
         let _ = self.db.insert_usage(&UsageRecord {
             provider_id: self.provider_row.id,
             article_id: Some(self.article_id),
