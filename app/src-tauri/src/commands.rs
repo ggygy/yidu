@@ -175,6 +175,7 @@ pub struct PrefsStored {
     pub dict_fallback: Option<bool>,
     pub price_per_mtok: Option<f64>, // 每 1M tokens 人民币
     pub custom_prompt: Option<String>, // 翻译风格 prompt;空串 = 用默认
+    pub theme_mode: Option<String>,    // v0.3:外观三态 system | light | dark(替代 localStorage v3-dark)
 }
 
 #[derive(Serialize, Clone)]
@@ -187,6 +188,7 @@ pub struct PrefsEffective {
     pub dict_fallback: bool,
     pub price_per_mtok: f64,
     pub custom_prompt: Option<String>, // None = 用内置默认 prompt
+    pub theme_mode: String,
 }
 
 pub fn load_prefs(db: &crate::db::Db) -> Result<PrefsStored, String> {
@@ -213,6 +215,10 @@ pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        theme_mode: match p.theme_mode.as_deref() {
+            Some(m @ ("light" | "dark")) => m.to_string(),
+            _ => "system".into(),
+        },
     }
 }
 
@@ -224,7 +230,14 @@ pub fn get_prefs(state: State<AppState>) -> Result<PrefsEffective, String> {
 
 #[tauri::command]
 pub fn set_prefs(app: tauri::AppHandle, state: State<AppState>, update: PrefsStored) -> Result<PrefsEffective, String> {
-    let mut stored = load_prefs(&state.db)?;
+    apply_prefs_update(&app, &state, update)
+}
+
+/// 合并偏好更新 → 副作用(热键重注册 / 外观)→ 落库 → 广播 `prefs-changed`(三窗同步;Rust 侧菜单改外观也走这里)
+pub fn apply_prefs_update(app: &tauri::AppHandle, state: &AppState, update: PrefsStored) -> Result<PrefsEffective, String> {
+    use tauri::Emitter;
+    let old = load_prefs(&state.db)?;
+    let mut stored = old.clone();
     if let Some(v) = &update.hotkey {
         stored.hotkey = Some(v.clone());
     }
@@ -252,18 +265,27 @@ pub fn set_prefs(app: tauri::AppHandle, state: State<AppState>, update: PrefsSto
     if update.price_per_mtok.is_some() {
         stored.price_per_mtok = update.price_per_mtok;
     }
+    if let Some(v) = &update.theme_mode {
+        stored.theme_mode = Some(v.clone());
+    }
     // 热键变更:Rust 侧重注册
     let new_hotkey = effective_prefs(&stored).hotkey;
-    let old_hotkey = effective_prefs(&load_prefs(&state.db)?).hotkey;
+    let old_hotkey = effective_prefs(&old).hotkey;
     if new_hotkey != old_hotkey {
-        crate::reregister_hotkey(&app, &old_hotkey, &new_hotkey).map_err(err)?;
+        crate::reregister_hotkey(app, &old_hotkey, &new_hotkey).map_err(err)?;
     }
     state
         .db
         .set_state(PREFS_KEY, &serde_json::to_string(&stored).map_err(err)?)
         .map_err(err)?;
-    Ok(effective_prefs(&stored))
+    let eff = effective_prefs(&stored);
+    if eff.theme_mode != effective_prefs(&old).theme_mode {
+        crate::native::apply_theme_mode(app, &eff.theme_mode);
+    }
+    let _ = app.emit("prefs-changed", eff.clone());
+    Ok(eff)
 }
+
 
 // ---------- 词典查词(工单 13 链路) ----------
 
@@ -348,4 +370,19 @@ pub fn usage_summary(state: State<AppState>) -> Result<UsageSummary, String> {
 #[tauri::command]
 pub fn hotkey_status(state: State<crate::HotkeyState>) -> crate::HotkeyStatus {
     state.0.lock().unwrap().clone()
+}
+
+// ---------- 原生观感(v0.3 §2.7) ----------
+
+/// 系统强调色 hex;非 macOS / 读取失败 → None(前端回落 #0a7aff / #0a84ff)
+#[tauri::command]
+pub fn get_accent() -> Option<String> {
+    crate::native::current_accent()
+}
+
+/// 打开独立设置窗口(async:Windows 上同步命令里建窗会死锁)
+#[tauri::command]
+pub async fn open_settings(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
+    crate::native::show_settings(&app, section.as_deref());
+    Ok(())
 }

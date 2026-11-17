@@ -82,6 +82,7 @@ export interface Prefs {
   dict_fallback: boolean;
   price_per_mtok: number;
   custom_prompt: string | null; // null = 用内置默认(英文)
+  theme_mode: "system" | "light" | "dark"; // v0.3:外观三态(Rust set_theme 权威)
 }
 
 export interface DictSense {

@@ -100,20 +100,17 @@ export function CodeBox({ src }: { src: string }) {
     try { await navigator.clipboard.writeText(body); setCopied(true); window.setTimeout(() => setCopied(false), 1200); } catch {}
   };
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-codebg px-4 py-3.5">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="rounded-md bg-white/8 px-2 py-0.5 text-[10px] text-codetx">代码块 · 不翻译</span>
+    <div className="selectable overflow-hidden rounded-lg bg-codebg px-3.5 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-codedim">代码块 · 不翻译</span>
         <span className="flex items-center gap-2">
-          <span className="font-code text-[10px] text-codedim">{lang}</span>
-          <button
-            className="cursor-pointer rounded-md border border-white/14 px-2.5 py-0.5 font-ui text-[10px] text-codedim hover:border-white/30 hover:text-codetx"
-            onClick={copy}
-          >
+          <span className="font-code text-[11px] text-codedim">{lang}</span>
+          <button className="btn !h-[20px] !px-2 !text-[11px]" onClick={copy}>
             {copied ? "✓ 已复制" : "复制"}
           </button>
         </span>
       </div>
-      <pre className="overflow-x-auto font-code text-xs leading-relaxed text-codetx">{body}</pre>
+      <pre className="overflow-x-auto font-code text-[12px] leading-relaxed text-codetx">{body}</pre>
     </div>
   );
 }

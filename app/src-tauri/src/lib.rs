@@ -5,6 +5,7 @@ mod commands;
 mod db;
 mod dict;
 mod keychain;
+mod native;
 mod prompt;
 mod providers;
 mod sse;
@@ -102,15 +103,16 @@ pub fn set_hotkey_status(app: &tauri::AppHandle, accel: &str, error: Option<Stri
     let _ = app.emit("hotkey-status", status);
 }
 
-/// 打开主窗并跳到设置
+/// 打开主窗;settings = 改为打开独立设置窗口的「快捷窗」分区(热键改键入口)
 pub fn show_main(app: &tauri::AppHandle, settings: bool) {
+    if settings {
+        native::show_settings(app, Some("quick"));
+        return;
+    }
     if let Some(m) = app.get_webview_window("main") {
         let _ = m.show();
         let _ = m.unminimize();
         let _ = m.set_focus();
-        if settings {
-            let _ = app.emit_to("main", "open-settings", ());
-        }
     }
 }
 
@@ -147,15 +149,19 @@ pub fn reregister_hotkey(app: &tauri::AppHandle, old: &str, new: &str) -> Result
     }
 }
 
-/// 关闭即隐藏(v0.3 §1):红灯 / ⌘W 不再销毁 webview,⌥T / 托盘始终可唤回
+/// 关闭即隐藏(v0.3 §1):红灯 / ⌘W 不再销毁 webview,⌥T / 托盘始终可唤回;
+/// 获焦时重读系统强调色(§2.7:改强调色须去系统设置,回来必获焦)
 fn hide_on_close(app: &tauri::AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
         let w2 = w.clone();
-        w.on_window_event(move |e| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+        let app2 = app.clone();
+        w.on_window_event(move |e| match e {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = w2.hide();
             }
+            tauri::WindowEvent::Focused(true) => native::refresh_accent(&app2),
+            _ => {}
         });
     }
 }
@@ -166,6 +172,7 @@ pub fn run() {
         .plugin(
             WindowStateBuilder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE) // 重启不自动显示快捷窗
+                .with_denylist(&["settings"]) // 设置窗固定尺寸、每次居中
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -184,6 +191,7 @@ pub fn run() {
             // 不写 Keychain —— 避免 SecItemUpdate 触发系统授权弹框把 setup 卡死。
 
             app.manage(HotkeyState::default());
+            app.manage(native::AccentState(std::sync::Mutex::new(native::current_accent())));
 
             // 关闭即隐藏:主窗与快捷窗
             hide_on_close(app.handle(), "main");
@@ -191,7 +199,13 @@ pub fn run() {
 
             // tray:唤出主窗/快捷窗、退出(热键失败时首项为「改键」入口)
             let stored = commands::load_prefs(&db)?;
-            let accel = commands::effective_prefs(&stored).hotkey;
+            let eff = commands::effective_prefs(&stored);
+            let accel = eff.hotkey.clone();
+
+            // 外观三态(Rust 权威)+ 应用菜单(macOS:自定义菜单须自带编辑菜单)
+            #[cfg(target_os = "macos")]
+            native::install_menu(app.handle(), &eff.theme_mode)?;
+            native::apply_theme_mode(app.handle(), &eff.theme_mode);
             let menu = build_tray_menu(app.handle(), &HotkeyStatus { accel: accel.clone(), error: None })?;
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().expect("缺少应用图标").clone())
@@ -236,6 +250,8 @@ pub fn run() {
             commands::set_prefs,
             commands::usage_summary,
             commands::hotkey_status,
+            commands::get_accent,
+            commands::open_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

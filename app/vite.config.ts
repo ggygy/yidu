@@ -7,6 +7,6 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 1430, strictPort: true },
   build: {
-    rollupOptions: { input: { main: "index.html", quick: "quick.html" } },
+    rollupOptions: { input: { main: "index.html", quick: "quick.html", settings: "settings.html" } },
   },
 });

@@ -73,6 +73,11 @@ export function hotkeyStatus(): Promise<HotkeyStatus> {
   return invoke<HotkeyStatus>("hotkey_status");
 }
 
+/** 打开独立设置窗口(section: models | translate | quick | usage | about) */
+export function openSettings(section?: string): Promise<void> {
+  return invoke("open_settings", { section: section ?? null });
+}
+
 export function usageSummary(): Promise<UsageSummary> {
   return invoke<UsageSummary>("usage_summary");
 }
