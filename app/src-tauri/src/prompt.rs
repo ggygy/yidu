@@ -48,7 +48,7 @@ fn default_style_prompt(from: &str, to: &str) -> String {
 
 fn protocol_block() -> &'static str {
     "Protocol (mandatory):\n\
-     - Input segments are wrapped as <s id=\"N\">…</s>. For every segment output exactly one <t id=\"N\">…</t> with the same id, in the same order; none may be missing.\n\
+     - Input segments are wrapped as <s id=\"N\">…</s>. For every segment output exactly one <t id=\"N\">…</t> with the same id, in the same order; none may be missing. Every output segment must open with <t id=\"N\"> — never with <s.\n\
      - Preserve Markdown structure exactly: heading levels, lists, bold/italic, links, tables, quotes, and blank-line layout.\n\
      - Never translate code blocks, inline code, URLs, file paths, commands, or variable names; keep them verbatim.\n\
      - Output the translated segments only — no explanations of any kind.\n\

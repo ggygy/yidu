@@ -97,7 +97,8 @@ pub struct Tagged {
 
 /// `<t id="N">…</t>` 状态机:feed 每个内容 delta,返回凑齐的完整块。
 /// 宽容解析(模型偶尔不按原样输出):`id=1` / `id='1'` / 多余空格 / `</t >`,
-/// 以及把输入的 `<s id="N">…</s>` 原样回显成输出;闭合标签与开标签同字母才算闭合。
+/// 以及把输入的 `<s id="N">` 回显成开标签(实测 claude-deepseek 会写 `<s id="2">译文</t>`)。
+/// `<t id>` 只认 `</t>` 闭合(译文里的 `<s>删除线</s>` 不截断);`<s id>` 认 `</s>` 或 `</t>`。
 pub struct TagStateMachine {
     buf: String,
 }
@@ -111,7 +112,7 @@ fn close_re(letter: &str) -> &'static regex::Regex {
     static T: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static S: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     if letter == "s" {
-        S.get_or_init(|| regex::Regex::new(r"<\s*/\s*s\s*>").unwrap())
+        S.get_or_init(|| regex::Regex::new(r"<\s*/\s*[st]\s*>").unwrap())
     } else {
         T.get_or_init(|| regex::Regex::new(r"<\s*/\s*t\s*>").unwrap())
     }
@@ -279,5 +280,17 @@ mod tests {
         assert_eq!(out, vec![SsePayload::Usage { prompt_tokens: 500, completion_tokens: 40, reasoning_tokens: 0, cached_tokens: 256 }]);
         let out = p.feed("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":1024}}}\n");
         assert_eq!(out, vec![SsePayload::Usage { prompt_tokens: 1200, completion_tokens: 9, reasoning_tokens: 0, cached_tokens: 1024 }]);
+    }
+
+    #[test]
+    fn mixed_s_open_t_close_real_reply() {
+        // 2026-11-17 ada / claude-deepseek-v4.1-flash 实际回复(debug_last_unparsed)
+        let raw = "<t id=\"1\">测试通过了。</t>\n<s id=\"2\">你粘贴的内容翻译得很干净。</t>\n<s id=\"3\">缓存也在正常工作。</t>\n<s id=\"5\">- 列表项一;\n- 列表项二 `\\`。</t>\n";
+        let mut m = TagStateMachine::new();
+        let ids: Vec<u32> = m.feed(raw).iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 5]);
+        // <t> 块里的删除线仍不截断
+        let mut m = TagStateMachine::new();
+        assert_eq!(m.feed("<t id=\"1\">a <s>b</s> c</t>")[0].text, "a <s>b</s> c");
     }
 }
