@@ -1,0 +1,418 @@
+<!doctype html>
+<!--
+  PROTOTYPE — 一次性原型,勿并入 app/。
+  问题(工单 12):译读 v0.3 的整体视觉语言该是什么样?
+  三个结构不同的方向,?variant=A|B|C 切换,底部浮条 ← → 或键盘方向键;T 键切亮/暗。
+  每个方向同时呈现:快捷窗(结果态+指标)/ 主窗沉浸阅读(对照)/ 设置。
+  数据为静态假数据,无任何真实调用。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>译读视觉方向原型</title>
+<style>
+@font-face { font-family: "Inter"; src: url("../../../app/src/assets/fonts/inter-latin.woff2") format("woff2"); font-weight: 100 900; }
+@font-face { font-family: "JBM"; src: url("../../../app/src/assets/fonts/jetbrainsmono-latin.woff2") format("woff2"); }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; }
+body { background: #d9dbe1; font-family: -apple-system, "PingFang SC", sans-serif; padding: 28px 28px 110px; }
+body.dark-stage { background: #2b2d33; }
+.stage { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+.cap { font: 600 11px/1 -apple-system, sans-serif; letter-spacing: .06em; color: #6b6f7a; margin: 0 0 8px 4px; text-transform: uppercase; }
+body.dark-stage .cap { color: #9a9ea8; }
+.lights { display: flex; gap: 8px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; display: block; background: #ff5f57; }
+.lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+kbd { font: 500 11px/1 "JBM", ui-monospace, monospace; }
+.mono { font-family: "JBM", ui-monospace, monospace; }
+
+/* ---------- 浮动切换条(原型工具,非设计内容) ---------- */
+#switcher { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 999;
+  display: flex; align-items: center; gap: 4px; background: #111; color: #fff; border-radius: 999px;
+  padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,.35); font: 500 13px/1 -apple-system, sans-serif; border: 2px dashed #f5c400; }
+#switcher button { background: #2a2a2a; color: #fff; border: 0; border-radius: 999px; height: 32px; min-width: 32px; padding: 0 12px; cursor: pointer; font: inherit; }
+#switcher button:hover { background: #3a3a3a; }
+#switcher .lbl { padding: 0 14px; min-width: 260px; text-align: center; }
+
+/* =====================================================================
+   A — v4 精修:亮色优先、无衬线、悬浮胶囊、滑出层;只修不改结构
+   ===================================================================== */
+.A { --bg:#ffffff; --surface:#f5f6f8; --surface-2:#eceef2; --line:#e3e5ea; --t1:#14161c; --t2:#4a5060; --t3:#6b7180;
+  --accent:#4f46e5; --on-accent:#fff; --accent-soft:#eef0ff; --ok:#16a34a; --shadow:0 18px 50px rgba(16,19,34,.16);
+  --f:"Inter", -apple-system, "PingFang SC", sans-serif; font-family: var(--f); color: var(--t1); }
+.A.dark { --bg:#121316; --surface:#1b1c21; --surface-2:#24262c; --line:#2c2e35; --t1:#f1f2f4; --t2:#b4b8c2; --t3:#8d929e;
+  --accent:#6d6af7; --on-accent:#fff; --accent-soft:#25264a; --ok:#4ade80; --shadow:0 18px 50px rgba(0,0,0,.55); }
+.A .win { background: var(--bg); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; border: 1px solid var(--line); position: relative; }
+.A .qw { width: 420px; height: 640px; display: flex; flex-direction: column; }
+.A .qhead { height: 44px; display: flex; align-items: center; padding: 0 12px 0 14px; gap: 10px; }
+.A .qhead .t { font-weight: 600; font-size: 13px; margin-left: 58px; }
+.A .qhead .k { font-size: 11px; color: var(--t3); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+.A .ib { margin-left: auto; display: flex; gap: 4px; }
+.A .ib span { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--t3); font-size: 14px; }
+.A .ib span.on { background: var(--accent-soft); color: var(--accent); }
+.A .row { display: flex; align-items: center; gap: 8px; padding: 2px 14px 10px; font-size: 13px; }
+.A .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; background: var(--surface); color: var(--t2); font-weight: 500; white-space: nowrap; }
+.A .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.A .chip.auto b { color: var(--accent); font-weight: 600; }
+.A .src { margin: 0 14px; background: var(--surface); border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.6; color: var(--t2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.A .out { flex: 1; overflow: auto; padding: 16px 18px 8px; font-size: 15px; line-height: 1.8; }
+.A .out h3 { font-size: 16px; font-weight: 650; margin-bottom: 6px; }
+.A .out p, .A .out ul { margin-bottom: 10px; }
+.A .out ul { padding-left: 18px; } .A .out li::marker { color: var(--accent); }
+.A .out code { font-family: "JBM", monospace; font-size: .86em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+.A .caret { display: inline-block; width: 2px; height: 1.05em; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.A .metrics { padding: 0 18px 6px; font-size: 11.5px; color: var(--t3); display: flex; gap: 10px; }
+.A .metrics b { color: var(--t2); font-weight: 600; }
+.A .capsule { margin: 6px 12px 12px; height: 46px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 6px 20px rgba(0,0,0,.08);
+  display: flex; align-items: center; padding: 0 6px; gap: 4px; font-size: 13px; }
+.A .capsule span { height: 34px; padding: 0 12px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; color: var(--t2); white-space: nowrap; }
+.A .capsule span.on { background: var(--surface); color: var(--t1); }
+.A .capsule .r { margin-left: auto; color: var(--accent); font-weight: 600; }
+.A .mw { width: 820px; height: 640px; display: flex; flex-direction: column; }
+.A .mhead { height: 48px; display: flex; align-items: center; padding: 0 14px; gap: 10px; border-bottom: 1px solid transparent; }
+.A .mhead .lib { margin-left: 64px; font-size: 13px; font-weight: 500; color: var(--t2); background: var(--surface); height: 28px; padding: 0 10px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; }
+.A .mhead .ttl { flex: 1; text-align: center; font-size: 12.5px; color: var(--t3); }
+.A .prog { height: 2px; background: var(--accent); width: 62%; }
+.A .read { flex: 1; overflow: auto; padding: 26px 0 90px; }
+.A .col { width: 620px; margin: 0 auto; }
+.A .col h1 { font-size: 30px; line-height: 1.25; font-weight: 750; letter-spacing: -.01em; }
+.A .meta { font-size: 12.5px; color: var(--t3); margin: 10px 0 22px; }
+.A .blk { margin-bottom: 20px; }
+.A .blk .en { font-size: 15px; line-height: 1.7; color: var(--t2); }
+.A .blk .zh { font-size: 17px; line-height: 1.85; color: var(--t1); font-weight: 500; margin-top: 6px; }
+.A .blk.term { border-left: 3px solid var(--accent); padding-left: 14px; }
+.A .tchip { font-size: 11.5px; background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 2px 6px; margin-left: 6px; font-weight: 500; }
+.A .code { background: #15171d; color: #d2d6e0; border-radius: 12px; padding: 14px 16px; font: 13px/1.7 "JBM", monospace; }
+.A .mcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; }
+.A .mcap .pill { height: 46px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0,0,0,.1); display: flex; align-items: center; padding: 0 6px; gap: 2px; font-size: 13px; }
+.A .mcap .pill span { height: 34px; padding: 0 12px; border-radius: 999px; display: inline-flex; align-items: center; color: var(--t2); white-space: nowrap; }
+.A .mcap .pill span.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.A .mcap .pill i { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+.A .mcap .go { height: 46px; padding: 0 18px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 13.5px; display: inline-flex; align-items: center; box-shadow: 0 8px 20px rgba(79,70,229,.35); white-space: nowrap; }
+.A .sw { width: 400px; height: 640px; display: flex; flex-direction: column; }
+.A .sw .sh { padding: 18px 20px 6px; font-size: 17px; font-weight: 650; display: flex; }
+.A .sw .sh span { margin-left: auto; color: var(--t3); font-weight: 400; }
+.A .sbody { flex: 1; overflow: auto; padding: 8px 16px 20px; }
+.A .grp { font-size: 12px; font-weight: 600; color: var(--t3); margin: 14px 4px 6px; }
+.A .card { background: var(--surface); border-radius: 12px; overflow: hidden; }
+.A .it { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 14px; font-size: 13.5px; border-top: 1px solid var(--line); }
+.A .it:first-child { border-top: 0; }
+.A .it .v { margin-left: auto; color: var(--t2); display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.A .tog { width: 34px; height: 20px; border-radius: 999px; background: var(--accent); position: relative; }
+.A .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+.A .tog.off { background: var(--surface-2); } .A .tog.off::after { right: auto; left: 2px; }
+.A .ok { color: var(--ok); font-size: 12.5px; }
+.A .sel { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; color: var(--t1); }
+.A .pchips { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 14px; }
+.A .pchips span { height: 28px; padding: 0 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; color: var(--t2); }
+.A .pchips span.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+
+/* =====================================================================
+   B — Spotlight / 指令条式:暗色优先、单色+一个强调色、键盘为主、信息密集
+   ===================================================================== */
+.B { --bg:#161618; --panel:#1e1e21; --line:#2e2e33; --t1:#ededef; --t2:#a8a8b0; --t3:#7c7c86; --accent:#ff7a45; --on-accent:#16110d;
+  --sel:#2a2a2f; --ok:#5ee08a; --shadow:0 30px 80px rgba(0,0,0,.6);
+  --f: -apple-system, "SF Pro Text", "PingFang SC", sans-serif; font-family: var(--f); color: var(--t1); }
+.B.light { --bg:#fbfbfc; --panel:#f1f1f3; --line:#e2e2e6; --t1:#18181b; --t2:#52525b; --t3:#71717a; --accent:#e8590c; --on-accent:#fff; --sel:#e9e9ec; --ok:#16a34a; --shadow:0 30px 80px rgba(0,0,0,.18); }
+.B .win { background: var(--bg); border-radius: 12px; box-shadow: var(--shadow); border: 1px solid var(--line); overflow: hidden; position: relative; }
+.B .qw { width: 640px; display: flex; flex-direction: column; }
+.B .bar { display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.B .bar .in { flex: 1; font-size: 19px; color: var(--t1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.B .tag { font-size: 12px; color: var(--t2); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.B .tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.B .res { padding: 16px 20px 14px; font-size: 15px; line-height: 1.75; max-height: 360px; overflow: auto; }
+.B .res h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.B .res ul { padding-left: 18px; margin: 6px 0; } .B .res li::marker { color: var(--t3); }
+.B .res code { font: .86em "JBM", monospace; color: var(--accent); }
+.B .caret { display: inline-block; width: 8px; height: 1em; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; opacity: .8; }
+.B .foot { height: 40px; border-top: 1px solid var(--line); display: flex; align-items: center; padding: 0 12px; gap: 14px; font-size: 12px; color: var(--t3); background: var(--panel); }
+.B .foot .act { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.B .foot kbd { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 5px; color: var(--t2); font-size: 10.5px; }
+.B .foot .m { margin-left: auto; font-family: "JBM", monospace; font-size: 11px; color: var(--t2); white-space: nowrap; }
+.B .foot .m em { color: var(--ok); font-style: normal; }
+.B .mw { width: 900px; height: 600px; display: flex; flex-direction: column; }
+.B .tb { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--t2); }
+.B .tb .crumb { margin-left: 60px; white-space: nowrap; } .B .tb .crumb b { color: var(--t1); font-weight: 500; }
+.B .seg { margin-left: auto; display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.B .seg span { padding: 3px 10px; border-radius: 5px; white-space: nowrap; } .B .seg span.on { background: var(--sel); color: var(--t1); }
+.B .grid { flex: 1; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; }
+.B .grid .h { position: sticky; top: 0; background: var(--bg); font-size: 11px; color: var(--t3); letter-spacing: .08em; padding: 10px 24px; border-bottom: 1px solid var(--line); }
+.B .cell { padding: 12px 24px; font-size: 14.5px; line-height: 1.75; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.B .cell.s { color: var(--t2); border-right: 1px solid var(--line); }
+.B .cell.hl { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.B .cell h2 { font-size: 22px; font-weight: 650; line-height: 1.3; color: var(--t1); }
+.B .cell .code { font: 12.5px/1.7 "JBM", monospace; color: var(--t2); background: var(--panel); border-radius: 8px; padding: 10px 12px; }
+.B .status { height: 28px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 0 12px; font: 11px "JBM", monospace; color: var(--t3); background: var(--panel); }
+.B .status .pg { width: 120px; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; } .B .status .pg i { display: block; height: 100%; width: 62%; background: var(--accent); }
+.B .status .r { margin-left: auto; }
+.B .sw { width: 640px; height: 420px; display: grid; grid-template-columns: 190px 1fr; }
+.B .side { background: var(--panel); border-right: 1px solid var(--line); padding: 44px 8px 8px; font-size: 13px; }
+.B .side .s { color: var(--t3); font-size: 11px; letter-spacing: .08em; padding: 10px 8px 4px; }
+.B .side div.i { padding: 6px 8px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--t2); }
+.B .side div.i.on { background: var(--sel); color: var(--t1); }
+.B .side .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-left: auto; }
+.B .det { padding: 20px 22px; font-size: 13px; }
+.B .det h4 { font-size: 15px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.B .f { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 10px; margin-bottom: 10px; }
+.B .f label { color: var(--t3); text-align: right; font-size: 12px; }
+.B .f .x { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; height: 30px; padding: 0 10px; display: flex; align-items: center; color: var(--t1); font-family: "JBM", monospace; font-size: 12px; overflow: hidden; white-space: nowrap; }
+.B .f .x.focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.B .hint { font: 11px "JBM", monospace; color: var(--t3); margin: -4px 0 12px 86px; }
+.B .test { margin-left: 86px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ok); }
+.B .btn { height: 28px; padding: 0 12px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-weight: 600; display: inline-flex; align-items: center; font-size: 12.5px; }
+
+/* =====================================================================
+   C — macOS 原生:系统材质(半透明模糊)、SF 字体、分段控件、系统设置式分组列表、跟随系统强调色
+   ===================================================================== */
+.C { --wall: linear-gradient(135deg,#6b8cce 0%,#b48fd6 50%,#f2b5a0 100%);
+  --mat: rgba(246,246,248,.78); --mat-2: rgba(255,255,255,.7); --line: rgba(0,0,0,.1); --t1:#1d1d1f; --t2:#4c4c52; --t3:#6e6e73;
+  --accent: AccentColor; --on-accent:#fff; --ok:#28a745; --group:#fff; --bgdoc:#ffffff;
+  --f: -apple-system, "SF Pro Text", "PingFang SC", sans-serif; --fr: "New York", "Songti SC", Georgia, serif; font-family: var(--f); color: var(--t1); }
+.C.dark { --mat: rgba(40,40,44,.72); --mat-2: rgba(60,60,66,.6); --line: rgba(255,255,255,.1); --t1:#f5f5f7; --t2:#c7c7cc; --t3:#98989f;
+  --accent: AccentColor; --ok:#32d74b; --group:#2c2c2e; --bgdoc:#1e1e1e; }
+.C.stagewall { background: var(--wall); border-radius: 18px; padding: 26px; display: flex; gap: 26px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+.C .win { border-radius: 12px; overflow: hidden; box-shadow: 0 22px 60px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.3); position: relative; }
+.C .glass { background: var(--mat); backdrop-filter: blur(30px) saturate(1.6); -webkit-backdrop-filter: blur(30px) saturate(1.6); }
+.C .qw { width: 400px; }
+.C .ut { height: 52px; display: flex; align-items: center; padding: 0 12px 0 14px; gap: 10px; border-bottom: .5px solid var(--line); }
+.C .segc { margin-left: 62px; display: flex; background: rgba(120,120,128,.16); border-radius: 7px; padding: 2px; font-size: 12px; font-weight: 500; }
+.C .segc span { padding: 3px 10px; border-radius: 5px; color: var(--t2); white-space: nowrap; } .C .segc span.on { background: var(--mat-2); color: var(--t1); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.C .tbtn { margin-left: auto; display: flex; gap: 2px; color: var(--t3); font-size: 14px; } .C .tbtn span { width: 28px; height: 24px; display: grid; place-items: center; border-radius: 6px; }
+.C .pop { display: flex; gap: 8px; padding: 10px 14px 0; }
+.C .pbtn { font-size: 12px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--mat-2); box-shadow: 0 .5px 1.5px rgba(0,0,0,.25); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--t1); }
+.C .pbtn small { color: var(--t3); }
+.C .tf { margin: 10px 14px; background: var(--mat-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: var(--t2); line-height: 1.5; border: .5px solid var(--line); }
+.C .doc { background: var(--bgdoc); margin: 0 10px; border-radius: 8px; padding: 14px 16px; font-family: var(--f); font-weight: 500; font-size: 15px; line-height: 1.75; color: var(--t1); min-height: 280px; }
+.C .doc h3 { font-family: var(--f); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.C .doc ul { padding-left: 18px; margin: 6px 0; }
+.C .doc code { font: .84em "JBM", monospace; background: rgba(120,120,128,.14); padding: 1px 4px; border-radius: 4px; }
+.C .caret { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+.C .sb { height: 34px; display: flex; align-items: center; gap: 12px; padding: 0 14px; font-size: 11.5px; color: var(--t3); }
+.C .sb .b { margin-left: auto; height: 22px; padding: 0 10px; border-radius: 6px; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; font-weight: 500; font-size: 12px; }
+.C .sb .g { height: 22px; padding: 0 10px; border-radius: 6px; background: var(--mat-2); box-shadow: 0 .5px 1.5px rgba(0,0,0,.25); display: inline-flex; align-items: center; color: var(--t1); font-size: 12px; }
+.C .mw { width: 820px; height: 600px; display: flex; flex-direction: column; }
+.C .mt { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: .5px solid var(--line); }
+.C .mt .segc { margin-left: 70px; }
+.C .mt .tt { font-size: 13px; font-weight: 600; flex: 1; text-align: center; }
+.C .split { flex: 1; display: grid; grid-template-columns: var(--sbw,0px) 1fr var(--iw,0px); min-height: 0; }
+.C .lib { border-right: .5px solid var(--line); padding: 10px 8px; font-size: 12.5px; overflow: hidden; }
+.C .lib .h { font-size: 11px; color: var(--t3); font-weight: 600; padding: 6px 8px; }
+.C .lib div.a { padding: 6px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t1); }
+.C .lib div.a small { display: block; color: var(--t3); font-size: 11px; }
+.C .lib div.a.on { background: rgba(120,120,128,.2); }
+.C .mini { font-size: 11.5px; color: var(--t3); display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.C .mini .bar2 { width: 70px; margin: 0; }
+.C .reader { background: var(--bgdoc); overflow: auto; padding: 28px 46px 30px; }
+.C .reader h1 { font-size: 28px; font-weight: 700; letter-spacing: -.01em; line-height: 1.25; }
+.C .reader .meta { font-size: 12px; color: var(--t3); margin: 8px 0 20px; }
+.C .pair { margin-bottom: 18px; }
+.C .pair .en { font-size: 14.5px; line-height: 1.7; color: var(--t2); }
+.C .pair .zh { font-weight: 500; font-size: 17px; line-height: 1.85; margin-top: 4px; }
+.C .insp { border-left: .5px solid var(--line); padding: 14px; font-size: 12px; overflow: auto; }
+.C .insp h5 { font-size: 11px; color: var(--t3); font-weight: 600; margin: 12px 0 6px; }
+.C .kv { display: flex; justify-content: space-between; padding: 4px 0; color: var(--t2); } .C .kv b { color: var(--t1); font-weight: 500; font-variant-numeric: tabular-nums; }
+.C .bar2 { height: 5px; border-radius: 3px; background: rgba(120,120,128,.2); overflow: hidden; margin: 4px 0 8px; } .C .bar2 i { display: block; height: 100%; width: 62%; background: var(--accent); }
+.C .sw { width: 560px; height: 470px; display: grid; grid-template-columns: 170px 1fr; }
+.C .sside { padding: 46px 8px 8px; border-right: .5px solid var(--line); font-size: 13px; }
+.C .sside div { padding: 5px 8px; border-radius: 6px; display: flex; gap: 8px; align-items: center; }
+.C .sside div.on { background: var(--accent); color: #fff; }
+.C .sside .ic { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; color: #fff; font-size: 11px; }
+.C .smain { background: var(--bgdoc); padding: 18px 20px; overflow: auto; }
+.C .smain h4 { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+.C .gl { background: color-mix(in srgb, var(--group) 100%, transparent); border-radius: 10px; border: .5px solid var(--line); margin-bottom: 14px; }
+.C.dark .gl { background: var(--group); }
+.C:not(.dark) .smain { background: #f2f2f7; }
+.C .gr { display: flex; align-items: center; min-height: 38px; padding: 6px 12px; font-size: 13px; border-top: .5px solid var(--line); gap: 8px; }
+.C .gr:first-child { border-top: 0; }
+.C .gr .v { margin-left: auto; color: var(--t3); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.C .gr .pbtn { color: var(--t1); }
+.C .sw2 { width: 30px; height: 18px; border-radius: 999px; background: var(--ok); position: relative; } .C .sw2::after { content: ""; position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+.C .sw2.off { background: rgba(120,120,128,.3); } .C .sw2.off::after { right: auto; left: 2px; }
+.C .foot2 { font-size: 11px; color: var(--t3); padding: 0 4px 12px; }
+.note { max-width: 1300px; margin: 0 auto 18px; font: 13px/1.6 -apple-system, "PingFang SC", sans-serif; color: #3a3d45; background: rgba(255,255,255,.7); border-radius: 10px; padding: 10px 14px; }
+body.dark-stage .note { background: rgba(0,0,0,.35); color: #d6d8de; }
+.note b { font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="note" id="note"></div>
+<div id="root"></div>
+<div id="switcher"><button id="prev">←</button><span class="lbl" id="lbl"></span><button id="next">→</button><button id="theme">亮/暗 (T)</button></div>
+<script>
+const SRC = "Hydration mismatches happen when the server-rendered HTML differs from the client's first render. Common causes:";
+const TITLE_EN = "Tauri 2.0: Architecture Deep Dive";
+const QUICK_HTML = (caret) => `
+  <h3>水合(hydration)失败</h3>
+  <p>服务器渲染的 HTML 与客户端首次渲染的结果不一致。常见原因:</p>
+  <ul><li>组件在服务端访问了 <code>window</code> / <code>document</code>;</li>
+  <li><code>useEffect</code> 在同步渲染期间修改了 DOM;</li>
+  <li>两次渲染之间的 <code>key</code> 不稳定${caret}</li></ul>`;
+const PAIRS = [
+  ["Tauri is a framework for building fast, lightweight desktop applications with a Rust backend and a web frontend.",
+   "Tauri 是一个构建轻量、快速桌面应用的框架:后端用 Rust,前端用 Web 技术。", false],
+  ["During development the frontend talks to the Rust core over a custom IPC protocol. Streaming responses arrive through a channel.",
+   "开发阶段,前端通过自定义 IPC 协议与 Rust 内核通信;流式响应经由 channel 到达。", true],
+  ["The bundle size of a typical Tauri app is a few megabytes — a good fit for tools that live quietly in the menu bar.",
+   "Tauri 应用的包体通常只有几 MB,很适合安静常驻在菜单栏里的小工具。", false],
+];
+const CODE = `#[tauri::command]\nasync fn translate(text: String) -> Result&lt;Vec&lt;Block&gt;, String&gt; {\n    translate_blocks(&amp;blocks).await\n}`;
+const lights = `<div class="lights"><i></i><i></i><i></i></div>`;
+
+const VARIANTS = {
+  A: {
+    name: "v4 精修(亮色优先 · 无衬线 · 悬浮胶囊)",
+    defaultDark: false,
+    note: `<b>A · v4 精修</b>:保留 v4 的结构(无侧栏、底部悬浮胶囊、滑出层),只修审计问题——全无衬线(Inter/苹方 中粗)、去掉调试文案与快捷键 chip、有结果后输入收成两行摘要、指标一行常驻在胶囊上方、主按钮外凸、设置收成 4 组分组卡片。默认跟随系统亮暗。`,
+    render: (dark) => `
+    <div class="stage A ${dark ? "dark" : ""}">
+      <div><div class="cap">快捷窗 · 结果流式中</div>
+      <div class="win qw">
+        <div class="qhead" style="position:relative"><div style="position:absolute;left:14px">${lights}</div><span class="t">快捷翻译</span><span class="k">⌥T</span>
+          <div class="ib"><span class="on">📌</span><span>⤢</span><span>✕</span></div></div>
+        <div class="row"><span class="chip auto">⚡ <b>自动</b> EN → 中</span><span class="chip" style="margin-left:auto"><i class="dot"></i>GLM-4-flash ▾</span></div>
+        <div class="src">${SRC}</div>
+        <div class="out">${QUICK_HTML('<span class="caret"></span>')}</div>
+        <div class="metrics"><span>首字 <b>0.62s</b></span><span>已用 <b>1.4s</b></span><span><b>466 → 153</b> tok</span><span>≈ ¥0.0004</span></div>
+        <div class="capsule"><span>⧉ 复制</span><span>▤ 对照</span><span class="r">存入文章库 →</span></div>
+      </div></div>
+      <div><div class="cap">主窗 · 对照阅读(翻译中)</div>
+      <div class="win mw">
+        <div class="mhead" style="position:relative"><div style="position:absolute;left:14px">${lights}</div><span class="lib">▥ 文章库 <kbd style="color:var(--t3)">⌘K</kbd></span><span class="ttl">${TITLE_EN}</span><span style="color:var(--t3)">⚙</span></div>
+        <div class="prog"></div>
+        <div class="read"><div class="col">
+          <h1>${TITLE_EN}</h1><div class="meta">md · 3,412 字 · 31 块(19 已译)· 术语命中 3 · 首字 0.71s</div>
+          ${PAIRS.map(([e, z, t]) => `<div class="blk ${t ? "term" : ""}"><div class="en">${e}</div><div class="zh">${z}${t ? '<span class="tchip">IPC → 进程间通信</span>' : ""}</div></div>`).join("")}
+          <pre class="code">${CODE}</pre>
+        </div></div>
+        <div class="mcap"><div class="pill"><span class="on">对照</span><span>分栏</span><span>译文</span><span>纯净</span><i></i><span>术语 12</span><span>生词 38</span><i></i><span>● GLM-4-flash</span></div><span class="go">■ 取消翻译 · 19/31</span></div>
+      </div></div>
+      <div><div class="cap">设置(右滑出)</div>
+      <div class="win sw">
+        <div class="sh">设置<span>✕</span></div>
+        <div class="sbody">
+          <div class="grp">模型</div>
+          <div class="card"><div class="pchips"><span>DeepSeek</span><span class="on">● GLM</span><span>OpenAI</span><span>Ollama</span><span>＋ 自定义</span></div>
+            <div class="it">API Key<span class="v">•••• 已存钥匙串 <span class="ok">✓ 412 ms</span></span></div>
+            <div class="it">模型<span class="v"><span class="sel">glm-4-flash ▾</span></span></div>
+            <div class="it" style="font-size:12px;color:var(--t3)">请求地址<span class="v mono" style="font-size:11px">open.bigmodel.cn/api/paas/v4/chat/completions</span></div></div>
+          <div class="grp">翻译</div>
+          <div class="card"><div class="it">方向<span class="v"><span class="sel">⚡ 自动 ▾</span></span></div><div class="it">单词查词<span class="v">词典 → 模型兜底 <span class="tog"></span></span></div></div>
+          <div class="grp">快捷窗</div>
+          <div class="card"><div class="it">快捷键<span class="v"><span class="sel">⌥T</span></span></div><div class="it">粘贴即译<span class="v"><span class="tog"></span></span></div><div class="it">置顶<span class="v"><span class="tog"></span></span></div></div>
+          <div class="grp">用量</div>
+          <div class="card"><div class="it">本月<span class="v">212 次 · 98.4K tok · ≈ ¥0.20</span></div><div class="it">平均首字<span class="v">0.68s</span></div></div>
+        </div>
+      </div></div>
+    </div>`,
+  },
+  B: {
+    name: "指令条式(暗色优先 · 键盘为主 · 信息密集)",
+    defaultDark: true,
+    note: `<b>B · 指令条式</b>:快捷窗改为 Raycast/Spotlight 式宽条——顶部一行即输入,结果在下方展开,底部状态栏放键位动作 + 指标(首字/速度/成本)。主窗放弃胶囊,改为细工具栏 + 左右对齐网格 + 底部状态栏;设置为两栏(列表/详情)、表单即时生效无保存键。单色灰阶 + 一个暖橙强调色。`,
+    render: (dark) => `
+    <div class="stage B ${dark ? "" : "light"}">
+      <div><div class="cap">快捷窗 · 结果流式中</div>
+      <div class="win qw">
+        <div class="bar"><span style="font-size:18px;color:var(--t3)">⌕</span><span class="in">${SRC}</span><span class="tag">EN → 中 · 自动</span><span class="tag"><i class="dot"></i>glm-4-flash</span></div>
+        <div class="res">${QUICK_HTML('<span class="caret"></span>')}</div>
+        <div class="foot"><span class="act"><kbd>↵</kbd>复制</span><span class="act"><kbd>⌘D</kbd>对照</span><span class="act"><kbd>⌘S</kbd>入库</span><span class="act"><kbd>⌘K</kbd>更多</span>
+          <span class="m">TTFT <em>0.62s</em> · 41 tok/s · 466→153 · ¥0.0004</span></div>
+      </div></div>
+      <div><div class="cap">主窗 · 分栏对齐阅读</div>
+      <div class="win mw">
+        <div class="tb" style="position:relative"><div style="position:absolute;left:12px">${lights}</div><span class="crumb">文章库 / <b>${TITLE_EN}</b></span>
+          <div class="seg"><span>对照</span><span class="on">分栏</span><span>译文</span></div><span>⌘K</span><span>⚙</span></div>
+        <div class="grid">
+          <div class="h">SOURCE · EN</div><div class="h">译文 · 中</div>
+          <div class="cell s"><h2 style="color:var(--t2)">${TITLE_EN}</h2></div><div class="cell"><h2>Tauri 2.0:架构深入解析</h2></div>
+          ${PAIRS.map(([e, z, t]) => `<div class="cell s ${t ? "hl" : ""}">${e}</div><div class="cell ${t ? "hl" : ""}">${z}</div>`).join("")}
+          <div class="cell s"><div class="code">${CODE}</div></div><div class="cell"><div class="code" style="opacity:.5">代码块 · 不翻译</div></div>
+        </div>
+        <div class="status"><span>19/31 块</span><span class="pg"><i></i></span><span>首字 0.71s</span><span>3.2K tok</span><span class="r">● glm-4-flash · ⌘. 取消</span></div>
+      </div></div>
+      <div><div class="cap">设置 · 两栏即时生效</div>
+      <div class="win sw">
+        <div class="side"><div style="position:absolute;left:12px;top:12px">${lights}</div>
+          <div class="s">模型</div><div class="i">DeepSeek</div><div class="i on">GLM <i class="dot"></i></div><div class="i">OpenAI</div><div class="i">Ollama</div><div class="i" style="color:var(--t3)">＋ 添加</div>
+          <div class="s">通用</div><div class="i">翻译</div><div class="i">快捷窗</div><div class="i">用量</div></div>
+        <div class="det"><h4>GLM <span class="tag"><i class="dot"></i>使用中</span></h4>
+          <div class="f"><label>Base URL</label><div class="x">https://open.bigmodel.cn/api/paas/v4</div></div>
+          <div class="hint">→ POST …/v4/chat/completions</div>
+          <div class="f"><label>API Key</label><div class="x focus">sk-••••••••••••3f9a</div></div>
+          <div class="f"><label>模型</label><div class="x">glm-4-flash  ▾ (拉取到 14 个)</div></div>
+          <div class="f"><label>思考</label><div class="x" style="font-family:var(--f)">关闭(推荐,首字更快)</div></div>
+          <div class="test"><span class="btn">测试</span>✓ 连通 · 412 ms · 上下文 128K</div>
+        </div>
+      </div></div>
+    </div>`,
+  },
+  C: {
+    name: "macOS 原生(定稿候选:L 侧栏 · I 检查器)",
+    defaultDark: false,
+    note: `<b>C · macOS 原生</b>:放弃自定义视觉,向系统靠拢——半透明材质窗口、SF 字体、统一工具栏 + 分段控件(原文/译文/对照)、系统强调色、系统设置式分组列表;<br><b>已定(2026-11-17)</b>:跟随系统亮暗与系统强调色;译文正文无衬线中粗;文章库=原生侧栏默认收起(☰ / ⌘K,本原型按 L);检查器默认收起(ⓘ / ⌘I,本原型按 I),收起时工具栏常驻精简进度+首字。`,
+    render: (dark) => `
+    <div class="C ${dark ? "dark" : ""} stagewall">
+      <div><div class="cap" style="color:#fff">快捷窗 · 结果流式中</div>
+      <div class="win glass qw">
+        <div class="ut" style="position:relative"><div style="position:absolute;left:14px">${lights}</div><div class="segc"><span>原文</span><span class="on">译文</span><span>对照</span></div><div class="tbtn"><span>📌</span><span>⧉</span></div></div>
+        <div class="pop"><span class="pbtn">自动 <small>(英语)</small> → 中文 ⌃</span><span class="pbtn" style="margin-left:auto">GLM-4-flash ⌃</span></div>
+        <div class="tf">${SRC}</div>
+        <div class="doc">${QUICK_HTML('<span class="caret"></span>')}</div>
+        <div class="sb"><span>首字 0.62s · 153 tok · 41/s</span><span class="g">复制</span><span class="b">存入文章库</span></div>
+      </div></div>
+      <div><div class="cap" style="color:#fff">主窗 · 对照阅读 + 检查器</div>
+      <div class="win glass mw">
+        <div class="mt" style="position:relative"><div style="position:absolute;left:12px">${lights}</div><div class="segc"><span class="on">对照</span><span>分栏</span><span>译文</span></div><span class="tt">${TITLE_EN}</span>${UI.insp ? "" : '<span class="mini"><span class="bar2"><i></i></span>19/31 · 首字 0.71s</span>'}<div class="tbtn"><span style="${UI.side ? "color:var(--accent)" : ""}">☰</span><span style="${UI.insp ? "color:var(--accent)" : ""}">ⓘ</span><span>⚙</span></div></div>
+        <div class="split" style="--sbw:${UI.side ? "200px" : "0px"};--iw:${UI.insp ? "220px" : "0px"}">
+          <div class="lib glass">${UI.side ? `<div class="h">置顶</div><div class="a on">${TITLE_EN}<small>今天 · 19/31</small></div><div class="h">最近</div><div class="a">The Rust Async Book · Ch.3<small>11-10 · 已译完</small></div><div class="a">RSC 报错分析<small>11-09 · 粘贴</small></div><div class="a">SQLite WAL Mode Explained<small>11-08 · 已译完</small></div><div class="h">资料</div><div class="a">术语库 · 12</div><div class="a">生词本 · 38</div>` : ""}</div>
+          <div class="reader"><h1>${TITLE_EN}</h1><div class="meta">md · 3,412 字 · 今天</div>
+            ${PAIRS.map(([e, z]) => `<div class="pair"><div class="en">${e}</div><div class="zh">${z}</div></div>`).join("")}</div>
+          <div class="insp glass" style="${UI.insp ? "" : "display:none"}"><h5>进度</h5><div class="bar2"><i></i></div><div class="kv">块<b>19 / 31</b></div>
+            <h5>本次翻译</h5><div class="kv">首字<b>0.71 s</b></div><div class="kv">耗时<b>8.4 s</b></div><div class="kv">输入<b>2,410</b></div><div class="kv">输出<b>1,036</b></div><div class="kv">速度<b>44 tok/s</b></div><div class="kv">成本<b>≈ ¥0.007</b></div>
+            <h5>术语命中</h5><div class="kv">IPC<b>进程间通信</b></div><div class="kv">webview<b>网页视图</b></div>
+            <div style="margin-top:14px"><span class="pbtn" style="background:var(--accent);color:#fff">取消翻译</span></div></div>
+        </div>
+      </div></div>
+      <div><div class="cap" style="color:#fff">设置 · 系统设置式</div>
+      <div class="win glass sw">
+        <div class="sside"><div style="position:absolute;left:12px;top:14px;padding:0">${lights}</div>
+          <div class="on"><span class="ic" style="background:#5e5ce6">✦</span>模型</div><div><span class="ic" style="background:#30b0c7">文</span>翻译</div><div><span class="ic" style="background:#ff9f0a">⌥</span>快捷窗</div><div><span class="ic" style="background:#34c759">¥</span>用量</div></div>
+        <div class="smain"><h4>模型</h4>
+          <div class="gl"><div class="gr">服务商<span class="v"><span class="pbtn">GLM(智谱) ⌃</span></span></div><div class="gr">API 密钥<span class="v">已存于钥匙串 <span class="pbtn">更改…</span></span></div><div class="gr">模型<span class="v"><span class="pbtn">glm-4-flash ⌃</span></span></div><div class="gr">关闭思考<span class="v"><span class="sw2"></span></span></div></div>
+          <div class="foot2">✓ 已连通 · 412 ms · 请求 open.bigmodel.cn/…/chat/completions</div>
+          <div class="gl"><div class="gr">自定义服务商…<span class="v">›</span></div><div class="gr">Ollama(本地)<span class="v">未运行 ›</span></div></div>
+        </div>
+      </div></div>
+    </div>`,
+  },
+};
+
+const keys = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+let cur = keys.includes(params.get("variant")) ? params.get("variant") : "C";
+const UI = { side: false, insp: false };
+let dark = params.has("dark") ? params.get("dark") === "1" : VARIANTS[cur].defaultDark;
+function render() {
+  const v = VARIANTS[cur];
+  document.getElementById("root").innerHTML = v.render(dark);
+  document.getElementById("note").innerHTML = v.note;
+  document.getElementById("lbl").textContent = `${cur} — ${v.name} · ${dark ? "暗" : "亮"}`;
+  document.body.classList.toggle("dark-stage", dark);
+  const u = new URL(location.href); u.searchParams.set("variant", cur); u.searchParams.set("dark", dark ? "1" : "0");
+  history.replaceState(null, "", u);
+}
+function go(d) { const i = (keys.indexOf(cur) + d + keys.length) % keys.length; cur = keys[i]; dark = VARIANTS[cur].defaultDark; render(); }
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("theme").onclick = () => { dark = !dark; render(); };
+addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input,textarea,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") go(-1); else if (e.key === "ArrowRight") go(1); else if (e.key === "t" || e.key === "T") { dark = !dark; render(); } else if (e.key === "l" || e.key === "L") { UI.side = !UI.side; render(); } else if (e.key === "i" || e.key === "I") { UI.insp = !UI.insp; render(); }
+});
+render();
+</script>
+</body>
+</html>

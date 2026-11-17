@@ -1,0 +1,4 @@
+GB2312 han 6763 | Big5 han 13060 | JIS L1 han 2965
+JA_ONLY (J1∖GB∖B5) 325 chars, 975 bytes utf8
+SIMP_ONLY∩J1 120 | TRAD_ONLY∩J1 760 | combined bytes 2640
+sample JA_ONLY: 亜唖穐悪鯵圧鮎囲壱稲鰯隠欝営栄頴鋭駅閲円焔縁艶薗塩汚応鴬鴎穏仮価菓壊廻懐絵鈎拡撹殻覚楽樫梶渇椛竃噛栢苅勧巻寛歓潅観諌関陥

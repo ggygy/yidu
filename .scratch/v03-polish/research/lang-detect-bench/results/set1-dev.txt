@@ -1,0 +1,202 @@
+samples: 52  (short=13, mixed-tech=14, kanji-ja=6, en-loanword=6, sentence=13)
+
+approach | lang acc | target acc | und | short | mixed-tech | kanji-ja | en-loanword | sentence | µs/call
+current detectDir | 24/52 (46%) | 37/52 (71%) | 0 | 12/13 | 5/14 | 0/6 | 0/6 | 7/13 | 0.8
+improved heuristic | 49/52 (94%) | 50/52 (96%) | 0 | 12/13 | 14/14 | 4/6 | 6/6 | 13/13 | 4.1
+improved heuristic v2 | 49/52 (94%) | 50/52 (96%) | 0 | 12/13 | 14/14 | 4/6 | 6/6 | 13/13 | 4.0
+improved heuristic v2 (J1-restricted tables) | 49/52 (94%) | 50/52 (96%) | 0 | 12/13 | 14/14 | 4/6 | 6/6 | 13/13 | 3.8
+hybrid v2 + eld-S fallback | 49/52 (94%) | 50/52 (96%) | 0 | 12/13 | 14/14 | 4/6 | 6/6 | 13/13 | 3.8
+franc-min (only 8, raw) | 26/52 (50%) | 41/52 (79%) | 15 | 2/13 | 5/14 | 0/6 | 6/6 | 13/13 | 8.8
+franc-min (only 8, minLength 1, stripped) | 40/52 (77%) | 44/52 (85%) | 1 | 9/13 | 12/14 | 0/6 | 6/6 | 13/13 | 7.2
+eld-XS (subset 8, raw) | 40/52 (77%) | 42/52 (81%) | 3 | 9/13 | 9/14 | 3/6 | 6/6 | 13/13 | 5.2
+eld-XS (subset 8, stripped) | 42/52 (81%) | 44/52 (85%) | 4 | 9/13 | 11/14 | 3/6 | 6/6 | 13/13 | 4.7
+eld-S (subset 8, stripped) | 44/52 (85%) | 46/52 (88%) | 3 | 9/13 | 12/14 | 4/6 | 6/6 | 13/13 | 5.6
+hybrid heuristic+eld-XS | 50/52 (96%) | 50/52 (96%) | 0 | 13/13 | 14/14 | 4/6 | 6/6 | 13/13 | 7.2
+
+--- misses ---
+
+# current detectDir (28)
+  fr→en  "Merci beaucoup"
+  zh→en  "## 安装\n\n先安装依赖:\n\n```bash\nnpm install --sav"
+  zh→en  "运行 `npm install --save-dev @tauri-apps/c"
+  zh→en  "详见 https://github.com/tauri-apps/tauri/b"
+  zh→en  "在 useEffect 里调用 invoke('translate_stream"
+  zh→en  "```ts\nexport async function translate(re"
+  zh→en  "- 修复 `detectDir()` 的 bug\n- 更新 `src-tauri"
+  zh→ja  "日志里出现 `エラー` 字样就重试一次"
+  zh→ja  "日本的「おもてなし」文化很有名"
+  zh→ko  "韩语的 안녕 是你好的意思"
+  ja→zh  "東京駅"
+  ja→zh  "経済産業省"
+  ja→zh  "取扱説明書"
+  ja→zh  "日本国憲法第九条"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+  en→fr  "I had a croissant at the café."
+  en→fr  "Please attach your résumé to the email."
+  en→fr  "The naïve approach fails on large inputs"
+  en→fr  "We met in front of the façade of the old"
+  en→es  "The piñata was a hit at the party."
+  en→fr  "Über-style apps dominate the market."
+  fr→en  "Il faut lire la documentation avant de c"
+  de→fr  "Die Übersetzung ist schön und schnell fe"
+  de→fr  "Bitte lesen Sie die Anleitung sorgfältig"
+  de→en  "Das Programm ist sehr gut und funktionie"
+  es→fr  "El rendimiento mejoró después de la actu"
+  es→en  "Necesito ayuda con el proyecto"
+
+# improved heuristic (3)
+  fr→en  "Merci beaucoup"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+# improved heuristic v2 (3)
+  fr→en  "Merci beaucoup"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+# improved heuristic v2 (J1-restricted tables) (3)
+  fr→en  "Merci beaucoup"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+# hybrid v2 + eld-S fallback (3)
+  en→es  "Hello"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+# franc-min (only 8, raw) (26)
+  zh→und  "你好"
+  zh→und  "翻译"
+  zh→und  "调用 API 失败"
+  en→und  "Hello"
+  en→und  "OK"
+  en→de  "Save changes"
+  ja→und  "ありがとう"
+  ja→und  "テスト"
+  ko→und  "감사합니다"
+  ru→und  "Привет"
+  fr→en  "Merci beaucoup"
+  zh→en  "## 安装\n\n先安装依赖:\n\n```bash\nnpm install --sav"
+  zh→en  "运行 `npm install --save-dev @tauri-apps/c"
+  zh→en  "详见 https://github.com/tauri-apps/tauri/b"
+  zh→fr  "在 useEffect 里调用 invoke('translate_stream"
+  zh→en  "```ts\nexport async function translate(re"
+  zh→en  "- 修复 `detectDir()` 的 bug\n- 更新 `src-tauri"
+  zh→ja  "日志里出现 `エラー` 字样就重试一次"
+  zh→ja  "日本的「おもてなし」文化很有名"
+  ko→es  "React 컴포넌트에서 useState를 사용하세요"
+  ja→und  "東京駅"
+  ja→und  "経済産業省"
+  ja→und  "取扱説明書"
+  ja→und  "日本国憲法第九条"
+  ja→und  "株式会社"
+  ja→und  "人工知能研究所"
+
+# franc-min (only 8, minLength 1, stripped) (12)
+  en→fr  "Hello"
+  en→und  "OK"
+  en→de  "Save changes"
+  fr→en  "Merci beaucoup"
+  zh→es  "在 useEffect 里调用 invoke('translate_stream"
+  zh→ja  "日本的「おもてなし」文化很有名"
+  ja→zh  "東京駅"
+  ja→zh  "経済産業省"
+  ja→zh  "取扱説明書"
+  ja→zh  "日本国憲法第九条"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+# eld-XS (subset 8, raw) (12)
+  zh→und  "翻译"
+  zh→und  "调用 API 失败"
+  en→es  "Hello"
+  en→und  "OK"
+  zh→es  "运行 `npm install --save-dev @tauri-apps/c"
+  zh→en  "在 useEffect 里调用 invoke('translate_stream"
+  zh→en  "```ts\nexport async function translate(re"
+  zh→en  "- 修复 `detectDir()` 的 bug\n- 更新 `src-tauri"
+  zh→ja  "日本的「おもてなし」文化很有名"
+  ja→zh  "取扱説明書"
+  ja→zh  "日本国憲法第九条"
+  ja→zh  "人工知能研究所"
+
+# eld-XS (subset 8, stripped) (10)
+  zh→und  "翻译"
+  zh→und  "调用 API 失败"
+  en→es  "Hello"
+  en→und  "OK"
+  zh→fr  "在 useEffect 里调用 invoke('translate_stream"
+  zh→und  "- 修复 `detectDir()` 的 bug\n- 更新 `src-tauri"
+  zh→ja  "日本的「おもてなし」文化很有名"
+  ja→zh  "取扱説明書"
+  ja→zh  "日本国憲法第九条"
+  ja→zh  "人工知能研究所"
+
+# eld-S (subset 8, stripped) (8)
+  zh→und  "翻译"
+  zh→und  "调用 API 失败"
+  en→es  "Hello"
+  en→und  "OK"
+  zh→en  "在 useEffect 里调用 invoke('translate_stream"
+  zh→ja  "日本的「おもてなし」文化很有名"
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+# hybrid heuristic+eld-XS (2)
+  ja→zh  "株式会社"
+  ja→zh  "人工知能研究所"
+
+--- improved heuristic v2 detail ---
+OK  zh→zh conf=0.80 han jaOnly=0 simp=0 trad=0 | "你好"
+OK  zh→zh conf=0.80 han jaOnly=0 simp=1 trad=0 | "翻译"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=2 trad=0 | "调用 API 失败"
+OK  en→en conf=0.28 latin:no-signal→en | "Hello"
+OK  en→en conf=0.28 latin:no-signal→en | "OK"
+OK  en→en conf=0.40 latin:no-signal→en | "Save changes"
+OK  ja→ja conf=1.00 kana-only | "ありがとう"
+OK  ja→ja conf=0.80 kana-only | "テスト"
+OK  ko→ko conf=1.00 hangul | "감사합니다"
+OK  ru→ru conf=1.00 cyrillic | "Привет"
+XX  fr→en conf=0.40 latin:no-signal→en | "Merci beaucoup"
+OK  de→de conf=1.00 latin:{"en":0,"fr":0,"de":1.5,"es":0} | "Danke schön"
+OK  es→es conf=0.70 latin:{"en":0,"fr":0,"de":0,"es":8} | "¿Dónde está?"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=7 trad=0 | "## 安装\n\n先安装依赖:\n\n```bash\nnpm ins"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=2 trad=0 | "运行 `npm install --save-dev @ta"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=3 trad=0 | "详见 https://github.com/tauri-ap"
+OK  zh→zh conf=0.68 han jaOnly=0 simp=1 trad=0 | "在 useEffect 里调用 invoke('transl"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=5 trad=0 | "```ts\nexport async function tr"
+OK  zh→zh conf=0.83 han jaOnly=0 simp=1 trad=0 | "- 修复 `detectDir()` 的 bug\n- 更新 "
+OK  zh→zh conf=1.00 han jaOnly=0 simp=3 trad=0 | "日志里出现 `エラー` 字样就重试一次"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=0 trad=0 | "日本的「おもてなし」文化很有名"
+OK  zh→zh conf=0.82 han jaOnly=0 simp=2 trad=0 | "韩语的 안녕 是你好的意思"
+OK  en→en conf=1.00 latin:{"en":6,"fr":0,"de":0,"es":0} | "The parser keeps comments verb"
+OK  en→en conf=0.90 latin:{"en":10,"fr":0,"de":0,"es":0} | "Set the locale to `zh-CN` so t"
+OK  ru→ru conf=1.00 cyrillic | "Запустите `npm run build` и пр"
+OK  ko→ko conf=0.86 hangul | "React 컴포넌트에서 useState를 사용하세요"
+OK  ja→ja conf=1.00 kana 0.79 | "`cargo build` を実行してからアプリを起動してく"
+OK  ja→ja conf=0.75 kanji jaOnly=1 | "東京駅"
+OK  ja→ja conf=0.75 kanji jaOnly=3 | "経済産業省"
+OK  ja→ja conf=0.75 kanji jaOnly=1 | "取扱説明書"
+OK  ja→ja conf=0.60 kanji simp+trad mix 2/1 | "日本国憲法第九条"
+XX  ja→zh conf=1.00 han jaOnly=0 simp=1 trad=0 | "株式会社"
+XX  ja→zh conf=1.00 han jaOnly=0 simp=0 trad=0 | "人工知能研究所"
+OK  en→en conf=0.96 latin:{"en":10,"fr":0.75,"de":0,"es":0} | "I had a croissant at the café."
+OK  en→en conf=0.88 latin:{"en":6,"fr":1.5,"de":0,"es":0} | "Please attach your résumé to t"
+OK  en→en conf=0.81 latin:{"en":4,"fr":1.5,"de":0,"es":0} | "The naïve approach fails on la"
+OK  en→en conf=0.92 latin:{"en":12,"fr":2,"de":0,"es":0} | "We met in front of the façade "
+OK  en→en conf=0.85 latin:{"en":10,"fr":0,"de":0,"es":3} | "The piñata was a hit at the pa"
+OK  en→en conf=0.63 latin:{"en":2,"fr":0,"de":1.5,"es":0} | "Über-style apps dominate the m"
+OK  fr→fr conf=0.89 latin:{"en":0,"fr":9,"de":0,"es":2} | "Le système de traduction fonct"
+OK  fr→fr conf=0.67 latin:{"en":0,"fr":6,"de":0,"es":4} | "Il faut lire la documentation "
+OK  de→de conf=1.00 latin:{"en":0,"fr":0,"de":9,"es":0} | "Die Übersetzung ist schön und "
+OK  de→de conf=1.00 latin:{"en":0,"fr":0,"de":9.5,"es":0} | "Bitte lesen Sie die Anleitung "
+OK  de→de conf=1.00 latin:{"en":0,"fr":0,"de":10,"es":0} | "Das Programm ist sehr gut und "
+OK  es→es conf=0.89 latin:{"en":0,"fr":2,"de":0,"es":9} | "La aplicación está lista para "
+OK  es→es conf=0.74 latin:{"en":0,"fr":4.75,"de":0,"es":9} | "El rendimiento mejoró después "
+OK  es→es conf=1.00 latin:{"en":0,"fr":0,"de":0,"es":4} | "Necesito ayuda con el proyecto"
+OK  ru→ru conf=1.00 cyrillic | "Перевод технической документац"
+OK  ko→ko conf=1.00 hangul | "이 앱은 마크다운 문서를 번역합니다."
+OK  ja→ja conf=0.81 kana 0.71 | "このアプリはMarkdown文書を翻訳します。"
+OK  en→en conf=1.00 latin:{"en":4,"fr":0,"de":0,"es":0} | "The quick brown fox jumps over"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=5 trad=0 | "这个应用可以把英文文档翻译成中文。"
