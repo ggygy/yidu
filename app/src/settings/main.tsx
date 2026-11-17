@@ -117,7 +117,7 @@ function SettingsApp() {
           {section === "usage" && <UsageSection prefs={prefs} applyPrefs={applyPrefs} say={say} />}
         </div>
       </main>
-      {toast && <div className="fixed bottom-5 left-1/2 -translate-x-1/2 bg-t1 text-doc text-[12px] px-3.5 py-1.5 rounded-md z-[99] whitespace-nowrap">{toast}</div>}
+      {toast && <div className="toast fixed bottom-5 left-1/2 -translate-x-1/2 z-[99]">{toast}</div>}
     </div>
   );
 }

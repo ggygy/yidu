@@ -80,28 +80,25 @@ export function ModelsSection({ providers, refreshProviders, say }: { providers:
     <div className="grid grid-cols-[200px_minmax(0,1fr)] gap-4 items-start">
       {/* 服务商列表 */}
       <div className="relative">
-        <div className="gl overflow-hidden" data-tick={tick}>
+        <div className="flex flex-col gap-0.5" data-tick={tick} role="listbox">
           {providers.map((p) => {
             const t = testState(p);
+            const on = p.id === selId;
             return (
-              <button
-                key={p.id}
-                className={"w-full flex items-center gap-2 px-2.5 py-2 border-none border-t-[0.5px] border-line first:border-t-0 text-left " + (p.id === selId ? "bg-accent text-onaccent" : "bg-transparent hover:bg-surface2")}
-                onClick={() => setSelId(p.id)}
-              >
+              <button key={p.id} className="srow" role="option" aria-selected={on} onClick={() => setSelId(p.id)}>
                 <StatusDot t={t} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
                     <span className="text-[13px] truncate">{p.name}</span>
-                    {p.is_active && <span className={"text-[11px] px-1.5 rounded " + (p.id === selId ? "bg-white/25" : "bg-accentsoft text-accent")}>使用中</span>}
+                    {p.is_active && <span className={"text-[11px] px-1.5 rounded-full whitespace-nowrap " + (on ? "bg-white/25" : "bg-accentsoft text-accent")}>使用中</span>}
                   </span>
-                  <span className={"block text-[11px] font-code truncate " + (p.id === selId ? "opacity-80" : "text-t3")}>{p.model || "未选模型"}</span>
+                  <span className="sub block text-[11px] font-code truncate">{p.model || "未选模型"}</span>
                 </span>
               </button>
             );
           })}
         </div>
-        <button className="btn mt-2 w-full justify-center" onClick={() => setAdding(!adding)}>＋ 添加服务商</button>
+        <button className="srow mt-1.5 !text-t2 text-[13px]" onClick={() => setAdding(!adding)}><span className="w-4 text-center text-[15px] leading-none">＋</span>添加服务商</button>
         {adding && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setAdding(false)} />

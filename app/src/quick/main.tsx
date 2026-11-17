@@ -11,7 +11,7 @@ import { dirLabel, dirShort, detectDir } from "../languages";
 import { DirPicker } from "../dirselect";
 import { initNative } from "../native";
 import { Segmented, TbButton } from "../ui";
-import { IDLE, LiveStatus, MetricsDetail, metricsLine, reduceLive, startLive, type Live } from "../metrics";
+import { IDLE, LiveStatus, MetricsDetail, metricsLine, reduceLive, sec, startLive, type Live } from "../metrics";
 import { cachedModels, fetchModels, testState } from "../providers";
 import { addUsage, EMPTY_USAGE } from "../types";
 import type { Block, Prefs, Provider, SessionUsage, StreamEvent } from "../types";
@@ -320,7 +320,7 @@ function QuickApp() {
       </div>
 
       {/* 源文 */}
-      <div className="mx-3 mt-2.5 rounded-lg bg-doc/60 border-[0.5px] border-line px-2.5 py-2 flex-none">
+      <div className="mx-3 mt-2.5 rounded-[10px] bg-ctl shadow-[0_0_0_0.5px_var(--border)] px-3 py-2 flex-none focus-within:bg-doc focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)] transition-[background-color,box-shadow] duration-150">
         <textarea
           className="w-full h-[64px] border-none outline-none resize-none bg-transparent text-[13px] leading-[1.5] text-t1 placeholder:text-t3"
           value={input}
@@ -347,7 +347,7 @@ function QuickApp() {
       )}
 
       {/* 译文区:文档实底 */}
-      <div className="doc flex-1 min-h-0 mx-2.5 mt-2.5 rounded-lg bg-doc overflow-y-auto px-4 py-3 flex flex-col gap-2.5 [--zh-size:15px] [--zh-line:1.75]">
+      <div className="doc flex-1 min-h-0 mx-2.5 mt-2.5 rounded-[10px] bg-doc shadow-[0_0_0_0.5px_var(--border)] overflow-y-auto px-4 py-3.5 flex flex-col gap-3 [--zh-size:15px] [--zh-line:1.75]">
         {err && <p className="text-danger text-[12px] bg-surface2 rounded-md px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && (
           <p className="text-t3 text-[12px] m-0">
@@ -374,15 +374,15 @@ function QuickApp() {
         <span className="text-[11px] text-t3 truncate min-w-0 flex items-center gap-1.5">
           {streaming && live.running ? <LiveStatus live={live} /> : live.metrics ? (
             <>
-              <span className="truncate tabular-nums">{metricsLine(live.metrics)}</span>
+              <span className="truncate tabular-nums" title={metricsLine(live.metrics)}>首字 {sec(live.metrics.ttft_ms)} · 总 {sec(live.metrics.total_ms)} · {live.metrics.completion_tokens} tok</span>
               <button className="tbtn !w-5 !h-5 flex-none" title="翻译明细" onClick={(e) => { e.stopPropagation(); setInfoOpen(!infoOpen); }}><Icon n="info" size={12} /></button>
             </>
           ) : usage.requests ? `输入 ${usage.prompt_tokens} · 输出 ${usage.completion_tokens} tok` : ""}
         </span>
         <span className="flex-1" />
         {input && !streaming && !blocks.length && <button className="btn" onClick={clear}>清空</button>}
-        <button className="btn" disabled={!outText} onClick={() => navigator.clipboard?.writeText(outText).then(() => say("已复制"))}>复制</button>
-        {articleId && !streaming && <button className="btn" onClick={openInMain} title="翻译已自动存入文章库">在主窗打开</button>}
+        <TbButton icon="copy" title="复制译文" disabled={!outText} onClick={() => { navigator.clipboard?.writeText(outText).then(() => say("已复制")); }} size={14} />
+        <TbButton icon="library" title="在主窗打开(已自动存入文章库)" disabled={!articleId || streaming} onClick={openInMain} size={14} />
         {streaming
           ? <button className="btn" onClick={cancel}>取消</button>
           : <button className={"btn " + (input.trim() !== lastSrc.trim() || !blocks.length ? "primary" : "")} disabled={!input.trim() || !active} onClick={() => fire()} title="⌘↩">{blocks.length && input.trim() === lastSrc.trim() ? "重新翻译" : "翻译"}</button>}
@@ -392,7 +392,7 @@ function QuickApp() {
           </div>
         )}
       </div>
-      {toast && <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-t1 text-doc text-[12px] px-3 py-1.5 rounded-md z-[99] whitespace-nowrap">{toast}</div>}
+      {toast && <div className="toast absolute top-14 left-1/2 -translate-x-1/2 z-[99]">{toast}</div>}
     </div>
   );
 }

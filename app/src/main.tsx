@@ -547,9 +547,10 @@ function App() {
         {/* 文档区:实底 */}
         <main className="relative min-w-0 min-h-0 bg-doc">
           <div className="doc absolute inset-0 overflow-y-auto">
-            <div className="max-w-[760px] mx-auto px-10 pt-7 pb-24 flex flex-col gap-[14px]">
+            <div className={"max-w-[760px] mx-auto px-10 pt-8 pb-24 flex flex-col " + (view === "zh" ? "gap-3" : "gap-6")}>
               {!doc && (
                 <div className="flex flex-col items-center justify-center min-h-[60vh] gap-2 text-center">
+                  <div className="w-14 h-14 rounded-[14px] grid place-items-center text-[26px] font-bold text-white mb-2 shadow-[0_6px_18px_color-mix(in_srgb,var(--accent)_35%,transparent)]" style={{ background: "linear-gradient(145deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent))" }}>译</div>
                   <h1 className="text-[28px] font-bold m-0">译读</h1>
                   <p className="text-t2 text-[13px] m-0">本地优先的 markdown 翻译阅读器</p>
                   <div className="flex items-center gap-2 mt-3">
@@ -566,7 +567,7 @@ function App() {
                 </div>
               )}
               {doc && (
-                <div>
+                <div className="pb-1">
                   <h1 className="text-[28px] font-bold leading-[1.25] tracking-[-0.01em] m-0 selectable">{doc.article.title}</h1>
                   <div className="text-[12px] text-t3 mt-2 flex gap-2 flex-wrap items-center">
                     <span>{doc.article.kind === "md" ? "md" : "粘贴"}</span>·
@@ -586,7 +587,7 @@ function App() {
 
               {doc && view === "interleave" && blocks.map((b) =>
                 b.kind === "code" ? <CodeBox key={b.idx} src={b.src} /> : (
-                  <div key={b.idx} data-bidx={b.idx} className={"group relative flex flex-col gap-1 " + (b.terms ? "border-l-2 border-accent pl-3" : "")}>
+                  <div key={b.idx} data-bidx={b.idx} className={"group relative flex flex-col gap-1.5 " + (b.terms ? "border-l-2 border-accent pl-3" : "")}>
                     <button
                       className={"absolute -right-7 top-0 tbtn !w-6 !h-6 text-[11px] " + (collapsed.has(b.idx) ? "" : "opacity-0 group-hover:opacity-100")}
                       title={collapsed.has(b.idx) ? "展开原文" : "收起原文"}
@@ -740,7 +741,7 @@ function App() {
         onChange={async (e) => { const f = e.target.files?.[0]; if (!f) return; setDraft(await f.text()); setComposing(true); e.target.value = ""; }}
       />
       {confirm && <ConfirmCard title={confirm.title} body={confirm.body} confirmText={confirm.confirmText} onConfirm={confirm.onConfirm} onClose={() => setConfirm(null)} />}
-      {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-t1 text-doc text-[12px] px-3.5 py-1.5 rounded-md z-[99] whitespace-nowrap shadow-[var(--shadow-card)]">{toast}</div>}
+      {toast && <div className="toast fixed bottom-6 left-1/2 -translate-x-1/2 z-[99]">{toast}</div>}
     </div>
   );
 }
