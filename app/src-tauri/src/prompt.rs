@@ -85,6 +85,15 @@ pub fn user_msg(title: &str, prev: Option<&str>, blocks: &[&str]) -> String {
     s
 }
 
+/// 纯文本文章附加规则:保留换行;明显有结构时可还原成规范 Markdown;不得臆造结构
+pub fn plain_text_rule() -> &'static str {
+    "Plain-text input (mandatory):\n\
+     - These segments come from plain text, not Markdown. A trailing backslash at the end of a line marks a line break; a backslash before #, >, -, +, * or after a number (as in 1\\.) means that character is literal.\n\
+     - By default keep every line break exactly where the source has one, keeping the trailing backslash.\n\
+     - Only if a segment is clearly structured — e.g. consecutive lines that are obviously list items or steps, or a short standalone title line — you may output that segment as proper Markdown instead (a list, a numbered list, a heading), without backslashes.\n\
+     - Never invent structure that is not clearly present, and never merge or drop lines."
+}
+
 /// 连续对话的后续轮次:标题与上文已在前面的轮次里,只给待译片段(编号每轮从 1 开始)
 pub fn continue_msg(blocks: &[&str]) -> String {
     let mut s = format!("Translate the following {} segments:\n\n", blocks.len());

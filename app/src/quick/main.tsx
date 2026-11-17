@@ -5,7 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit, listen } from "@tauri-apps/api/event";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { Md, PassBlock } from "../md";
-import { isPassthrough, linkDefs, toMarkdown, toUnits, type Unit } from "../blocks";
+import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "../blocks";
 import { Icon } from "../icons";
 import * as api from "../api";
 import { dirLabel, dirShort, detectDir } from "../languages";
@@ -77,7 +77,8 @@ function QuickApp() {
 
   const active = providers.find((p) => p.is_active);
   // 复制 = 按原文分隔拼回的整篇 markdown(列表 / 引用 / 表格结构不散)
-  const outText = blocks.some((b) => b.trans && !isPassthrough(b.kind)) ? toMarkdown(blocks, "trans") : "";
+  const [articleKind, setArticleKind] = useState<string>("");
+  const outText = blocks.some((b) => b.trans && !isPassthrough(b.kind)) ? copyText(blocks, articleKind) : "";
   const [fmt, setFmt] = useLocalFlagStr("q-format", "auto"); // 原文格式:自动 / Markdown / 纯文本(§2.2.5)
 
   // 写 prefs(Rust 侧广播 prefs-changed,主窗 / 设置窗同步)
@@ -145,6 +146,7 @@ function QuickApp() {
     setLive((l) => reduceLive(l, e));
     if (e.type === "created") {
       setArticleId(e.article_id); // 翻译即自动入库
+      setArticleKind(e.article.kind);
       setBlocks(e.blocks);
     } else if (e.type === "usage") {
       setUsage((u) => addUsage(u, e));

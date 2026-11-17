@@ -132,7 +132,9 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
                 return Err(anyhow!("没有可翻译的内容"));
             }
             let title = blocks::derive_title(&text);
-            db.create_article_with_blocks(&title, &req.kind, &req.direction, &parsed)?
+            // 纯文本文章记为 kind=plain:翻译时允许模型还原明显结构、复制时去掉 md 转义
+            let kind = if plain { "plain" } else { req.kind.as_str() };
+            db.create_article_with_blocks(&title, kind, &req.direction, &parsed)?
         }
     };
     let (article, all_blocks) = db.get_article(article_id)?;
@@ -158,7 +160,12 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     // 批次策略:缓存优先 = 连续对话、串行;速度优先 = 独立请求、并发(默认 3;Ollama 本地单卡恒 1)
     let cache_mode = eff_prefs.batch_mode == "cache";
     let concurrency = if prov_row.kind == "ollama" || cache_mode { 1 } else { eff_prefs.concurrency.clamp(1, 3) as usize };
-    let system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
+    let plain = db.get_article(article_id).map(|(a, _)| a.kind == "plain").unwrap_or(false);
+    let mut system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
+    if plain {
+        system.push_str("\n\n");
+        system.push_str(prompt::plain_text_rule());
+    }
 
     let block_vec: Vec<Block> = all_blocks
         .iter()
@@ -194,6 +201,7 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
         article_id,
         title,
         system,
+        plain,
         channel,
         cancel: cancelled,
         term_rules: terms
@@ -281,6 +289,8 @@ struct BatchCtx<'a> {
     article_id: i64,
     title: String,
     system: String,
+    /// 纯文本文章:结构签名只比 URL 与行内码(允许模型还原列表 / 标题)
+    plain: bool,
     channel: &'a Channel<StreamEvent>,
     cancel: CancelCheck,
     /// 译后自动替换规则(工单 06:程序校验替换 + chip 标记)
@@ -428,6 +438,14 @@ impl BatchCtx<'_> {
     /// 单次请求:流式上屏(partial 打字机 + 完成块即写库即推送),返回 (完整块, raw, 统计)
     async fn request(&self, items: &[(usize, String)], prev: &str) -> Result<(Vec<Tagged>, String, StreamStats)> {
         self.request_with_note(items, prev, None).await
+    }
+
+    fn structure_diff(&self, src: &str, out: &str) -> Vec<String> {
+        if self.plain {
+            validate::structure_diff_relaxed(src, out)
+        } else {
+            validate::structure_diff(src, out)
+        }
     }
 
     /// 当前对话历史(速度优先模式恒空)
@@ -640,7 +658,7 @@ impl BatchCtx<'_> {
             let bad: Vec<(u32, Vec<String>)> = blocks
                 .iter()
                 .filter_map(|t| {
-                    let d = validate::structure_diff(src_of(t.id)?, &t.text);
+                    let d = self.structure_diff(src_of(t.id)?, &t.text);
                     (!d.is_empty()).then_some((t.id, d))
                 })
                 .collect();
@@ -657,7 +675,7 @@ impl BatchCtx<'_> {
                     let src = src_of(*id).unwrap_or("");
                     match retry.iter().find(|r| r.id == k as u32 + 1) {
                         Some(r) => {
-                            let d1 = validate::structure_diff(src, &r.text);
+                            let d1 = self.structure_diff(src, &r.text);
                             if let Some(b) = blocks.iter_mut().find(|b| b.id == *id) {
                                 b.text = r.text.clone();
                             }

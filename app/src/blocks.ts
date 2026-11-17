@@ -54,6 +54,24 @@ export function toMarkdown(blocks: Block[], which: "trans" | "src" = "trans"): s
     .trim();
 }
 
+/** 纯文本文章的复制形态:去掉行尾硬换行 `\` 与行首转义(`\#` `\>` `\-` `1\.`),
+ *  模型还原出的列表 / 标题保持 Markdown 原样 */
+export function plainCopy(md: string): string {
+  return md
+    .replace(/\\\n/g, "\n")
+    .replace(/\\$/gm, "")
+    .replace(/^(\s*)\\([#>+*-])/gm, "$1$2")
+    .replace(/^(\s*)(\d+)\\([.)])/gm, "$1$2$3");
+}
+
+/** 复制整篇译文:纯文本文章给干净文本,其余给拼回的 Markdown */
+export function copyText(blocks: Block[], articleKind: string | undefined): string {
+  const md = toMarkdown(blocks, "trans");
+  // 旧版纯文本文章 kind 仍是 paste:按原文里的硬换行标记识别
+  const plain = articleKind === "plain" || (articleKind === "paste" && blocks.some((b) => /\\\n/.test(b.src)));
+  return plain ? plainCopy(md) : md;
+}
+
 // ---------- HTML 块直通渲染(§2.2.2):白名单清洗,webview 里不允许任何脚本 ----------
 
 const DROP = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "LINK", "META", "BASE", "FORM", "INPUT", "BUTTON", "TEXTAREA", "SELECT", "SVG", "MATH", "TEMPLATE", "FRAME", "FRAMESET"]);

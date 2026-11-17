@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { check as checkUpdateFn } from "@tauri-apps/plugin-updater";
 import { Md, PassBlock, type TermHit } from "./md";
-import { isPassthrough, linkDefs, toUnits, type Unit } from "./blocks";
+import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "./blocks";
 import { Icon } from "./icons";
 import * as api from "./api";
 import { dirLabel, langZh, splitDir, detectDir } from "./languages";
@@ -565,7 +565,7 @@ function App() {
                         }}
                       ><Icon n="x" size={11} /></button>
                     </div>
-                    <div className="text-[11px] text-t3">{fmtDate(a.updated_at)} · {a.blocks_done === a.blocks_total ? "已译完" : `${a.blocks_done}/${a.blocks_total}`} · {a.kind === "md" ? "md" : "粘贴"}</div>
+                    <div className="text-[11px] text-t3">{fmtDate(a.updated_at)} · {a.blocks_done === a.blocks_total ? "已译完" : `${a.blocks_done}/${a.blocks_total}`} · {a.kind === "md" ? "md" : a.kind === "plain" ? "纯文本" : "粘贴"}</div>
                   </div>
                 </React.Fragment>
               ))}
@@ -605,7 +605,7 @@ function App() {
                 <div className="pb-1">
                   <h1 className="text-[28px] font-bold leading-[1.25] tracking-[-0.01em] m-0 selectable">{doc.article.title}</h1>
                   <div className="text-[12px] text-t3 mt-2 flex gap-2 flex-wrap items-center">
-                    <span>{doc.article.kind === "md" ? "md" : "粘贴"}</span>·
+                    <span>{doc.article.kind === "md" ? "md" : doc.article.kind === "plain" ? "纯文本" : "粘贴"}</span>·
                     <span>{dirLabel(doc.article.direction)}</span>·
                     <span>{doneCount}/{blocks.length} 块</span>·
                     <span>{fmtDate(doc.article.updated_at)}</span>
@@ -721,9 +721,15 @@ function App() {
               <>
                 <div className="h-[5px] rounded-full bg-fill2 overflow-hidden"><i className="block h-full bg-accent transition-[width] duration-500" style={{ width: `${progress}%` }} /></div>
                 <KV k="块" v={`${doneCount} / ${blocks.length}`} />
-                <div className="flex gap-2 mt-2">
+                <div className="flex gap-2 mt-2 flex-wrap">
                   {busy ? <button className="btn" onClick={cancelCurrent}>取消翻译</button>
                     : pendingCount > 0 ? <button className="btn primary" onClick={resumeOrDone}>续译 {pendingCount} 块</button> : null}
+                  <button
+                    className="btn"
+                    title={doc.article.kind === "plain" ? "复制为纯文本" : "复制为 Markdown(保留列表 / 表格结构)"}
+                    disabled={!blocks.some((b) => b.trans && !isPassthrough(b.kind))}
+                    onClick={() => navigator.clipboard?.writeText(copyText(blocks, doc.article.kind)).then(() => say("译文已复制"))}
+                  >复制译文</button>
                 </div>
               </>
             ) : <p className="text-t3 m-0">未打开文章</p>}

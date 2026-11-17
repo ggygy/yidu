@@ -239,6 +239,15 @@ pub fn structure_diff(src: &str, out: &str) -> Vec<String> {
     d
 }
 
+/// 纯文本文章的宽松比对:模型可把明显的列表 / 标题还原成 Markdown,结构变化是预期的;
+/// 只守住不该变的东西 —— 链接与行内码
+pub fn structure_diff_relaxed(src: &str, out: &str) -> Vec<String> {
+    structure_diff(src, out)
+        .into_iter()
+        .filter(|d| d.starts_with("URLs") || d.starts_with("inline code"))
+        .collect()
+}
+
 /// 给用户看的简短中文说明(块上「格式可能有误」的悬浮提示)
 pub fn diff_summary_zh(diffs: &[String]) -> String {
     let names: Vec<&str> = diffs
@@ -348,5 +357,15 @@ mod tests {
         assert_eq!(signature("- [x] a\n- [ ] b\n").lists, vec!["ul×2@0 task".to_string()]);
         assert_eq!(signature("- a\n\n- b\n").lists, vec!["ul×2@0 loose".to_string()]);
         assert_eq!(signature("3. a\n4. b\n").lists, vec!["ol3×2@0".to_string()]);
+    }
+
+    #[test]
+    fn relaxed_allows_restored_list_but_not_lost_links() {
+        let src = "Install the CLI\\\nRun `foo init`\\\nSee https://a.dev";
+        let restored = "- 安装 CLI\n- 运行 `foo init`\n- 见 https://a.dev";
+        assert!(!structure_diff(src, restored).is_empty(), "严格比对会报列表差异");
+        assert!(structure_diff_relaxed(src, restored).is_empty(), "宽松比对允许还原结构");
+        let lost = "- 安装 CLI\n- 运行 foo init";
+        assert!(!structure_diff_relaxed(src, lost).is_empty(), "行内码丢失仍要报");
     }
 }
