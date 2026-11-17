@@ -98,8 +98,8 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
     let url = format!("settings.html#{}", section.unwrap_or("models"));
     let builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("设置")
-        .inner_size(720.0, 540.0)
-        .min_inner_size(640.0, 440.0)
+        .inner_size(840.0, 600.0)
+        .min_inner_size(760.0, 480.0)
         .minimizable(false)
         .maximizable(false)
         .center();

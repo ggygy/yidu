@@ -134,7 +134,35 @@ impl super::Provider for Ollama {
         if !status.is_success() {
             return Err(anyhow!("HTTP {status}(Ollama 未运行?)"));
         }
-        Ok(t0.elapsed().as_millis() as u64)
+        let ms = t0.elapsed().as_millis() as u64;
+        // tags 通 ≠ 模型在:模型没 pull 过时按「模型不存在」报
+        let models = self.list_models().await.unwrap_or_default();
+        let want = self.model.trim();
+        let has = models.iter().any(|m| m == want || m.strip_suffix(":latest") == Some(want));
+        if !models.is_empty() && !has {
+            return Err(anyhow!("HTTP 404: model \"{want}\" not found(先 ollama pull {want})"));
+        }
+        Ok(ms)
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        let resp = super::shared_client()
+            .get(format!("{}/api/tags", self.base_url.trim_end_matches('/')))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(anyhow!("HTTP {status}(Ollama 未运行?)"));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let mut out: Vec<String> = v
+            .get("models")
+            .and_then(|d| d.as_array())
+            .map(|a| a.iter().filter_map(|m| m.get("name").and_then(|i| i.as_str()).map(str::to_string)).collect())
+            .unwrap_or_default();
+        out.sort();
+        Ok(out)
     }
 }
 

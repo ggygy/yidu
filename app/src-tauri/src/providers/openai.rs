@@ -118,4 +118,26 @@ impl super::Provider for OpenAiCompatible {
         }
         Ok(t0.elapsed().as_millis() as u64)
     }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        let resp = shared_client()
+            .get(super::models_url(&self.base_url))
+            .bearer_auth(&self.api_key)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("HTTP {status}: {body}"));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let mut out: Vec<String> = v
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|a| a.iter().filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string)).collect())
+            .unwrap_or_default();
+        out.sort();
+        Ok(out)
+    }
 }

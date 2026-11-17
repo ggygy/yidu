@@ -172,9 +172,9 @@
 
   /* ---- 弹层菜单 ---- */
   .menu { background: var(--surface); border-radius: 8px; box-shadow: var(--shadow-card); padding: 5px; min-width: 180px; }
-  .menu > button { width: 100%; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border: none; background: none; border-radius: 5px; color: var(--t1); font-size: 13px; text-align: left; white-space: nowrap; }
-  .menu > button:hover { background: var(--accent); color: var(--on-accent); }
-  .menu > button:hover * { color: inherit !important; }
+  .menu button:not(.btn):not(.tbtn) { width: 100%; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border: none; background: none; border-radius: 5px; color: var(--t1); font-size: 13px; text-align: left; white-space: nowrap; }
+  .menu button:not(.btn):not(.tbtn):hover { background: var(--accent); color: var(--on-accent); }
+  .menu button:not(.btn):not(.tbtn):hover * { color: inherit !important; }
   .menu > hr { border: none; border-top: 0.5px solid var(--border); margin: 4px 6px; }
 
   /* ---- 系统设置式分组列表 ---- */

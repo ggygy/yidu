@@ -81,15 +81,19 @@ pub async fn provider_save(state: State<'_, AppState>, input: ProviderInput) -> 
     let db = state.db.clone();
     // SQLite 写 + 后续读放线程池;同步命令会跑在主线程卡 UI
     tauri::async_runtime::spawn_blocking(move || {
+        // extra 未传 = 保留原值(v0.3:旧版每次存 "{}",把 thinking_unsupported 等标记冲掉)
+        let extra = match (&input.extra, input.id) {
+            (Some(e), id) => {
+                if let Some(id) = id {
+                    providers::thinking::clear_unsupported(id); // 思考控制可能变了,重新探测
+                }
+                e.clone()
+            }
+            (None, Some(id)) => db.get_provider(id).map(|r| r.extra).unwrap_or_else(|_| "{}".into()),
+            (None, None) => "{}".into(),
+        };
         let id = db
-            .upsert_provider(
-                input.id,
-                &input.name,
-                &input.kind,
-                &input.base_url,
-                &input.model,
-                input.extra.as_deref().unwrap_or("{}"),
-            )
+            .upsert_provider(input.id, &input.name, &input.kind, &input.base_url, &input.model, &extra)
             .map_err(err)?;
         db.get_provider(id).map_err(err)
     })
@@ -139,7 +143,112 @@ pub async fn provider_list(state: State<'_, AppState>) -> Result<Vec<ProviderRow
 pub struct TestResult {
     pub ok: bool,
     pub latency_ms: u64,
+    /// ok | no_key | auth | model | network | other(§2.3.3 错误分类)
+    pub kind: String,
     pub message: String,
+}
+
+impl TestResult {
+    fn fail(kind: &str, message: impl Into<String>) -> Self {
+        TestResult { ok: false, latency_ms: 0, kind: kind.into(), message: message.into() }
+    }
+}
+
+/// 把连通失败归类为用户能看懂的四类
+fn classify_error(e: &anyhow::Error) -> TestResult {
+    let raw = format!("{e:#}");
+    let low = raw.to_ascii_lowercase();
+    let short: String = raw.chars().take(160).collect();
+    if let Some(re) = e.downcast_ref::<reqwest::Error>() {
+        if re.is_connect() || re.is_timeout() || re.is_request() {
+            return TestResult::fail("network", format!("无法连接:检查地址、网络或代理({short})"));
+        }
+    }
+    if low.contains("error sending request") || low.contains("dns") || low.contains("connection refused") || low.contains("timed out") {
+        return TestResult::fail("network", format!("无法连接:检查地址、网络或代理({short})"));
+    }
+    if low.starts_with("http 401") || low.starts_with("http 403") || low.contains("invalid api key") || low.contains("incorrect api key") || low.contains("authentication") {
+        return TestResult::fail("auth", "密钥无效或无权限(401/403)");
+    }
+    let model_words = ["model_not_found", "model not found", "does not exist", "no such model", "not found the model", "unknown model", "invalid model", "模型不存在"];
+    if model_words.iter().any(|w| low.contains(w)) || (low.starts_with("http 404") && low.contains("model")) {
+        return TestResult::fail("model", "模型不存在:换一个模型名或从列表里选");
+    }
+    if low.starts_with("http 404") {
+        return TestResult::fail("network", "地址不对(404):检查 Base URL 是否需要带 /v1");
+    }
+    TestResult::fail("other", short)
+}
+
+/// 设置页表单当前值(未保存也能测 / 拉模型)
+#[derive(Deserialize)]
+pub struct ProviderForm {
+    pub id: Option<i64>,
+    pub kind: String,
+    pub base_url: String,
+    pub model: String,
+    /// 新输入的密钥;空 = 用已存钥匙串的
+    pub key: Option<String>,
+    pub extra: Option<String>,
+}
+
+fn form_provider(form: &ProviderForm) -> Result<(Box<dyn providers::Provider>, bool), String> {
+    let stored_key = form.id.and_then(keychain::effective_key);
+    let key = form.key.clone().filter(|k| !k.trim().is_empty()).map(|k| k.trim().to_string()).or(stored_key);
+    let has_key = key.is_some();
+    let row = ProviderRow {
+        id: form.id.unwrap_or(-1),
+        name: String::new(),
+        kind: form.kind.clone(),
+        base_url: form.base_url.trim().to_string(),
+        model: form.model.trim().to_string(),
+        extra: form.extra.clone().unwrap_or_else(|| "{}".into()),
+        is_active: false,
+        has_key,
+    };
+    Ok((providers::build_with_key(&row, key).map_err(err)?, has_key))
+}
+
+/// 用表单当前值测试连通(§2.3.3)
+#[tauri::command]
+pub async fn provider_test_form(form: ProviderForm) -> Result<TestResult, String> {
+    if form.base_url.trim().is_empty() {
+        return Ok(TestResult::fail("network", "请填写地址"));
+    }
+    if form.model.trim().is_empty() {
+        return Ok(TestResult::fail("model", "请填写模型"));
+    }
+    let (provider, has_key) = tauri::async_runtime::spawn_blocking(move || form_provider(&form).map(|p| (p, form.kind.clone())))
+        .await
+        .map_err(err)?
+        .map(|((p, k), kind)| (p, k || kind == "ollama"))?;
+    if !has_key {
+        return Ok(TestResult::fail("no_key", "缺少 API 密钥"));
+    }
+    match provider.test_conn().await {
+        Ok(ms) => Ok(TestResult { ok: true, latency_ms: ms, kind: "ok".into(), message: format!("已连通 · {ms} ms") }),
+        Err(e) => Ok(classify_error(&e)),
+    }
+}
+
+/// 拉取可用模型(§2.3.4:OpenAI 兼容 /models,Ollama /api/tags)
+#[tauri::command]
+pub async fn provider_models(form: ProviderForm) -> Result<Vec<String>, String> {
+    let (provider, _) = tauri::async_runtime::spawn_blocking(move || form_provider(&form)).await.map_err(err)??;
+    provider.list_models().await.map_err(|e| classify_error(&e).message)
+}
+
+/// 已存密钥的尾号提示「····9a1e」;前端永不拿完整密钥(§2.3.8)
+#[tauri::command]
+pub async fn provider_key_hint(id: i64) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        keychain::effective_key(id).map(|k| {
+            let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("····{tail}")
+        })
+    })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -153,11 +262,11 @@ pub async fn provider_test(state: State<'_, AppState>, id: i64) -> Result<TestRe
             .map_err(err)?
     };
     if row.kind == "openai_compatible" && !has_key {
-        return Ok(TestResult { ok: false, latency_ms: 0, message: "尚未配置 API Key".into() });
+        return Ok(TestResult::fail("no_key", "缺少 API 密钥"));
     }
     match provider.test_conn().await {
-        Ok(ms) => Ok(TestResult { ok: true, latency_ms: ms, message: format!("✓ {ms} ms") }),
-        Err(e) => Ok(TestResult { ok: false, latency_ms: 0, message: e.to_string() }),
+        Ok(ms) => Ok(TestResult { ok: true, latency_ms: ms, kind: "ok".into(), message: format!("已连通 · {ms} ms") }),
+        Err(e) => Ok(classify_error(&e)),
     }
 }
 

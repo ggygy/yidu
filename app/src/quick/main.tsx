@@ -11,6 +11,8 @@ import { dirLabel, dirShort, detectDir } from "../languages";
 import { DirPicker } from "../dirselect";
 import { initNative } from "../native";
 import { Segmented, TbButton } from "../ui";
+import { IDLE, LiveStatus, MetricsDetail, metricsLine, reduceLive, startLive, type Live } from "../metrics";
+import { cachedModels, fetchModels, testState } from "../providers";
 import { addUsage, EMPTY_USAGE } from "../types";
 import type { Block, Prefs, Provider, SessionUsage, StreamEvent } from "../types";
 import "../styles.css";
@@ -46,6 +48,12 @@ function QuickApp() {
   const [pin, setPin] = useLocalFlag("q-pin", true);
   const [auto, setAuto] = useLocalFlag("q-auto", true);
   const [view, setView] = useState<QView>("zh");
+  const [sideBySide, setSideBySide] = useLocalFlag("q-pair-cols", true); // 对照:左右两栏 / 上下
+  const [live, setLive] = useState<Live>(IDLE); // 阶段 / 计时 / 结束明细
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [lastSrc, setLastSrc] = useState(""); // 上次翻译的原文:输入改了才把主按钮切回「翻译」
+  const [expandProv, setExpandProv] = useState<number | null>(null); // 模型菜单里展开的服务商
+  const [provModels, setProvModels] = useState<Record<number, string[] | "busy" | string>>({});
   const [providers, setProviders] = useState<Provider[]>([]);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [usage, setUsage] = useState<SessionUsage>(EMPTY_USAGE); // 本次翻译累计 token(usage 事件)
@@ -99,6 +107,7 @@ function QuickApp() {
   }, []);
 
   const onEvent = (e: StreamEvent) => {
+    setLive((l) => reduceLive(l, e));
     if (e.type === "created") {
       setArticleId(e.article_id); // 翻译即自动入库
       setBlocks(e.blocks);
@@ -123,11 +132,15 @@ function QuickApp() {
     setBlocks([]);
     setArticleId(null);
     setUsage(EMPTY_USAGE);
+    setLive(startLive());
+    setInfoOpen(false);
+    setLastSrc(text);
     const effDir = direction === "auto" ? detectDir(text) : direction;
     try {
       sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste" }, onEvent);
     } catch (e) {
       setPhase("idle");
+      setLive(IDLE);
       setErr(String(e));
     }
   };
@@ -135,6 +148,7 @@ function QuickApp() {
   const cancel = async () => {
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
     setPhase("done");
+    setLive((l) => ({ ...l, running: false }));
   };
 
   const pasteOrType = (t: string) => {
@@ -155,15 +169,28 @@ function QuickApp() {
   };
   const openSettings = () => safe(() => api.openSettings("models"));
 
-  const switchProvider = async (id: number) => {
+  // 切换服务商 / 同一服务商内换模型(model 不传 = 用该服务商当前模型)
+  const switchProvider = async (id: number, model?: string) => {
     const next = providers.find((p) => p.id === id);
     setProvOpen(false);
-    if (!next || next.is_active) return;
+    setExpandProv(null);
+    if (!next) return;
+    if (next.is_active && (!model || model === next.model)) return;
     try {
-      await api.providerSetActive(id);
+      if (model && model !== next.model) await api.providerSave({ id, name: next.name, kind: next.kind, base_url: next.base_url, model });
+      if (!next.is_active) await api.providerSetActive(id);
       await refreshProviders();
-      say(`已切换到 ${next.name}`);
+      say(`已切换到 ${next.name} · ${model ?? next.model}`);
     } catch (e) { say(String(e)); }
+  };
+
+  const toggleExpand = (p: Provider) => {
+    if (expandProv === p.id) { setExpandProv(null); return; }
+    setExpandProv(p.id);
+    const cached = cachedModels(p.id);
+    if (cached.length) { setProvModels((m) => ({ ...m, [p.id]: cached })); return; }
+    setProvModels((m) => ({ ...m, [p.id]: "busy" }));
+    fetchModels(p).then((list) => setProvModels((m) => ({ ...m, [p.id]: list }))).catch((e) => setProvModels((m) => ({ ...m, [p.id]: String(e) })));
   };
 
   const togglePin = () => {
@@ -172,16 +199,16 @@ function QuickApp() {
     setPin(next);
   };
 
-  const clear = () => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); };
+  const clear = () => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); setLive(IDLE); setLastSrc(""); };
   const streaming = phase === "streaming";
 
   // 下拉点外部关闭
   useEffect(() => {
-    if (!dirOpen && !provOpen) return;
-    const h = () => { setDirOpen(false); setProvOpen(false); };
+    if (!dirOpen && !provOpen && !infoOpen) return;
+    const h = () => { setDirOpen(false); setProvOpen(false); setInfoOpen(false); setExpandProv(null); };
     window.addEventListener("click", h);
     return () => window.removeEventListener("click", h);
-  }, [dirOpen, provOpen]);
+  }, [dirOpen, provOpen, infoOpen]);
 
   // 全局键:Esc 先收下拉、翻译中则取消;⌘D 切对照(视图切换也在工具栏分段控件)
   useEffect(() => {
@@ -216,6 +243,7 @@ function QuickApp() {
       {/* 统一工具栏(44pt;红绿灯 {16,24} 中线对齐) */}
       <div className="tb tb-quick" data-tauri-drag-region>
         <Segmented value={view} options={QVIEWS} onChange={setView} />
+        {view === "pair" && <TbButton icon={sideBySide ? "cols" : "rows"} title={sideBySide ? "对照:左右两栏(点击改上下)" : "对照:上下(点击改左右两栏)"} onClick={() => setSideBySide(!sideBySide)} size={14} />}
         <span className="flex-1 self-stretch" data-tauri-drag-region />
         <TbButton icon="pin" title={pin ? "置顶中(点击取消)" : "置顶窗口"} active={pin} onClick={togglePin} size={14} />
         <TbButton icon="win" title="打开主窗口" onClick={showMain} size={14} />
@@ -250,16 +278,42 @@ function QuickApp() {
             {active ? <span className="truncate">{active.model}</span> : <span className="text-t3">未配置</span>}<Icon n="chev" size={11} />
           </button>
           {provOpen && (
-            <div className="menu absolute z-40 top-full mt-1 right-0" onClick={(e) => e.stopPropagation()}>
-              {providers.map((p) => (
-                <button key={p.id} title={p.base_url} onClick={() => switchProvider(p.id)}>
-                  <span className="w-3 flex-none text-accent">{p.is_active ? "✓" : ""}</span>
-                  <span>{p.name}</span>
-                  <span className="ml-auto pl-4 font-code text-[11px] text-t3">{p.model}</span>
-                </button>
-              ))}
+            <div className="menu absolute z-40 top-full mt-1 right-0 w-[290px] max-h-[420px] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              {providers.map((p) => {
+                const t = testState(p);
+                const ms = provModels[p.id];
+                return (
+                  <div key={p.id}>
+                    <div className="flex items-center">
+                      <button className="flex-1 min-w-0 !h-auto !py-1" title={p.base_url} onClick={() => switchProvider(p.id)}>
+                        <span className="w-3 flex-none text-accent">{p.is_active ? "✓" : ""}</span>
+                        <span className="min-w-0 flex flex-col leading-tight py-0.5">
+                          <span className="truncate">{p.name}</span>
+                          <span className="font-code text-[11px] text-t3 truncate">{p.model}</span>
+                        </span>
+                        <span className={"ml-auto pl-2 text-[11px] " + (!t ? "text-t3" : t.ok ? "text-t3" : "text-danger")}>{!t ? "" : t.ok ? `${t.ms} ms` : "连接失败"}</span>
+                      </button>
+                      <button className="!w-7 !px-0 justify-center flex-none" title="换模型" onClick={() => toggleExpand(p)}>
+                        <span className={"inline-block transition-transform " + (expandProv === p.id ? "rotate-90" : "")}>›</span>
+                      </button>
+                    </div>
+                    {expandProv === p.id && (
+                      <div className="pl-5 pb-1 max-h-[200px] overflow-y-auto">
+                        {ms === "busy" && <p className="text-[12px] text-t3 px-2 py-1 m-0">拉取模型中…</p>}
+                        {typeof ms === "string" && ms !== "busy" && <p className="text-[12px] text-danger px-2 py-1 m-0 break-all">拉取失败:{ms.slice(0, 80)}</p>}
+                        {Array.isArray(ms) && ms.length === 0 && <p className="text-[12px] text-t3 px-2 py-1 m-0">没有拉取到模型</p>}
+                        {Array.isArray(ms) && ms.map((m) => (
+                          <button key={m} className="!h-[22px]" onClick={() => switchProvider(p.id, m)}>
+                            <span className="w-3 flex-none">{m === p.model ? "✓" : ""}</span><span className="font-code text-[12px] truncate">{m}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <hr />
-              <button onClick={() => { setProvOpen(false); openSettings(); }}><span className="w-3 flex-none" />管理模型…</button>
+              <button onClick={() => { setProvOpen(false); openSettings(); }}><span className="w-3 flex-none" />管理模型…<span className="ml-auto text-[11px] text-t3">⌘,</span></button>
             </div>
           )}
         </div>
@@ -306,27 +360,36 @@ function QuickApp() {
           ) : view === "src" ? (
             <div key={b.idx}>{enOf(b, "text-[14px]")}</div>
           ) : view === "pair" ? (
-            <div key={b.idx} className="flex flex-col gap-1">{enOf(b, "text-[13.5px]")}{zhOf(b)}</div>
+            sideBySide
+              ? <div key={b.idx} className="grid grid-cols-2 gap-x-4 items-start">{enOf(b, "text-[13.5px] min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(b)}</div></div>
+              : <div key={b.idx} className="flex flex-col gap-1">{enOf(b, "text-[13.5px]")}{zhOf(b)}</div>
           ) : (
             <div key={b.idx}>{zhOf(b)}</div>
           ),
         )}
       </div>
 
-      {/* 状态栏:指标 + 复制 + 主操作 */}
-      <div className="h-[38px] flex items-center gap-2 px-3 flex-none">
-        <span className="text-[11px] text-t3 truncate min-w-0" title={usage.requests ? `本次 ${usage.requests} 次请求 · 输入 ${usage.prompt_tokens} · 输出 ${usage.completion_tokens}${usage.reasoning_tokens ? `(含思考 ${usage.reasoning_tokens})` : ""} tokens` : undefined}>
-          {streaming ? <><i className="inline-block w-1.5 h-1.5 rounded-full bg-accent mr-1.5 align-middle [animation:breathe_1.2s_infinite]" />翻译中</> : usage.requests ? `输入 ${usage.prompt_tokens} · 输出 ${usage.completion_tokens} tok` : ""}
+      {/* 状态栏:进行中 = 阶段 + 计时;结束 = 首字 · 总耗时 · 输出 tok ⓘ */}
+      <div className="relative h-[38px] flex items-center gap-2 px-3 flex-none">
+        <span className="text-[11px] text-t3 truncate min-w-0 flex items-center gap-1.5">
+          {streaming && live.running ? <LiveStatus live={live} /> : live.metrics ? (
+            <>
+              <span className="truncate tabular-nums">{metricsLine(live.metrics)}</span>
+              <button className="tbtn !w-5 !h-5 flex-none" title="翻译明细" onClick={(e) => { e.stopPropagation(); setInfoOpen(!infoOpen); }}><Icon n="info" size={12} /></button>
+            </>
+          ) : usage.requests ? `输入 ${usage.prompt_tokens} · 输出 ${usage.completion_tokens} tok` : ""}
         </span>
         <span className="flex-1" />
-        {input && !streaming && <button className="btn" onClick={clear}>清空</button>}
+        {input && !streaming && !blocks.length && <button className="btn" onClick={clear}>清空</button>}
         <button className="btn" disabled={!outText} onClick={() => navigator.clipboard?.writeText(outText).then(() => say("已复制"))}>复制</button>
-        {streaming ? (
-          <button className="btn" onClick={cancel}>取消</button>
-        ) : phase === "done" && articleId ? (
-          <button className="btn primary" onClick={openInMain} title="翻译已自动存入文章库">在主窗打开</button>
-        ) : (
-          <button className="btn primary" disabled={!input.trim() || !active} onClick={() => fire()} title="⌘↩">翻译</button>
+        {articleId && !streaming && <button className="btn" onClick={openInMain} title="翻译已自动存入文章库">在主窗打开</button>}
+        {streaming
+          ? <button className="btn" onClick={cancel}>取消</button>
+          : <button className={"btn " + (input.trim() !== lastSrc.trim() || !blocks.length ? "primary" : "")} disabled={!input.trim() || !active} onClick={() => fire()} title="⌘↩">{blocks.length && input.trim() === lastSrc.trim() ? "重新翻译" : "翻译"}</button>}
+        {infoOpen && live.metrics && (
+          <div className="menu absolute z-40 bottom-full mb-1 left-2 w-[280px] !p-3" onClick={(e) => e.stopPropagation()}>
+            <MetricsDetail m={live.metrics} price={prefs?.price_per_mtok} thinkTail={live.thinkTail} />
+          </div>
         )}
       </div>
       {toast && <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-t1 text-doc text-[12px] px-3 py-1.5 rounded-md z-[99] whitespace-nowrap">{toast}</div>}

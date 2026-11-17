@@ -72,6 +72,8 @@ pub trait Provider: Send + Sync {
     ) -> Result<StreamStats>;
     /// 1-token 连通测试,返回延迟毫秒
     async fn test_conn(&self) -> Result<u64>;
+    /// 可用模型列表(OpenAI 兼容 GET /models;Ollama GET /api/tags)
+    async fn list_models(&self) -> Result<Vec<String>>;
 }
 
 pub fn shared_client() -> &'static reqwest::Client {
@@ -88,7 +90,11 @@ pub fn shared_client() -> &'static reqwest::Client {
 
 /// 按配置构建 Provider;key 优先 dev 环境变量,否则 Keychain(不落库)
 pub fn build(row: &ProviderRow) -> Result<Box<dyn Provider>> {
-    let key = crate::keychain::effective_key(row.id);
+    build_with_key(row, crate::keychain::effective_key(row.id))
+}
+
+/// 用指定密钥构建(设置页「测试」用表单当前值,未保存的密钥也能测)
+pub fn build_with_key(row: &ProviderRow, key: Option<String>) -> Result<Box<dyn Provider>> {
     match row.kind.as_str() {
         "openai_compatible" => Ok(Box::new(openai::OpenAiCompatible {
             base_url: row.base_url.clone(),
@@ -124,7 +130,7 @@ pub async fn send_stream_with_thinking(
 ) -> Result<reqwest::Response> {
     let mut param = thinking_param;
     if let Some((field, value)) = &param {
-        body[*field] = value.clone();
+        body[field.as_str()] = value.clone();
     }
     // 最多 3 次:原值 → 降级值 → 去字段
     for _ in 0..3 {
@@ -145,16 +151,16 @@ pub async fn send_stream_with_thinking(
         let Some((field, value)) = param.clone() else {
             return Err(anyhow!("HTTP {status}: {text}"));
         };
-        if !thinking::error_mentions(field, status.as_u16(), &text) {
+        if !thinking::error_mentions(&field, status.as_u16(), &text) {
             return Err(anyhow!("HTTP {status}: {text}"));
         }
-        if let Some(fb) = thinking::fallback_value(field, &value) {
-            body[field] = fb.clone();
+        if let Some(fb) = thinking::fallback_value(&field, &value) {
+            body[field.as_str()] = fb.clone();
             param = Some((field, fb));
             continue;
         }
         if let Some(obj) = body.as_object_mut() {
-            obj.remove(field);
+            obj.remove(&field);
         }
         param = None;
         thinking::mark_unsupported(provider_id);
@@ -175,6 +181,12 @@ pub fn take_complete_utf8(buf: &mut Vec<u8>) -> String {
 }
 
 /// Base URL 归一化:去尾斜杠;已指到 chat/completions 则不重复拼接
+pub fn models_url(base_url: &str) -> String {
+    let b = base_url.trim_end_matches('/');
+    let b = b.strip_suffix("/chat/completions").unwrap_or(b);
+    format!("{b}/models")
+}
+
 pub fn chat_url(base_url: &str) -> String {
     let b = base_url.trim_end_matches('/');
     if b.ends_with("/chat/completions") {

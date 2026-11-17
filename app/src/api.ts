@@ -1,6 +1,6 @@
 // Tauri command 封装:全部走 Rust,流式经 Channel
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Article, Block, HotkeyStatus, Prefs, Provider, StreamEvent, TestResult, UsageSummary } from "./types";
+import type { Article, Block, HotkeyStatus, Prefs, Provider, ProviderForm, StreamEvent, TestResult, UsageSummary } from "./types";
 
 export function listArticles(query = ""): Promise<Article[]> {
   return invoke<Article[]>("list_articles", { query });
@@ -41,6 +41,7 @@ export function providerSave(input: {
   kind: string;
   base_url: string;
   model: string;
+  extra?: string | null; // 不传 = 保留原值
 }): Promise<Provider> {
   return invoke<Provider>("provider_save", { input });
 }
@@ -59,6 +60,21 @@ export function providerDelete(id: number): Promise<void> {
 
 export function providerTest(id: number): Promise<TestResult> {
   return invoke<TestResult>("provider_test", { id });
+}
+
+/** 用表单当前值测试(未保存的地址 / 密钥 / 模型也能测) */
+export function providerTestForm(form: ProviderForm): Promise<TestResult> {
+  return invoke<TestResult>("provider_test_form", { form });
+}
+
+/** 拉取可用模型(OpenAI 兼容 /models;Ollama /api/tags) */
+export function providerModels(form: ProviderForm): Promise<string[]> {
+  return invoke<string[]>("provider_models", { form });
+}
+
+/** 已存密钥尾号「····9a1e」;无密钥 = null */
+export function providerKeyHint(id: number): Promise<string | null> {
+  return invoke<string | null>("provider_key_hint", { id });
 }
 
 export function getPrefs(): Promise<Prefs> {

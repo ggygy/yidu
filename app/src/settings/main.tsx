@@ -1,5 +1,4 @@
 // v0.3 §2.7.6 独立设置窗口(⌘,):系统设置式,左侧 4 分区 —— 模型 / 翻译 / 快捷窗 / 用量
-// M2 只换框架与视觉;模型分区的「列表 + 详情 / 自动保存 / 拉取模型 / 激活门槛」在 M3(§2.3)重做
 import { createRoot } from "react-dom/client";
 import { useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -10,7 +9,8 @@ import * as api from "../api";
 import { DirPicker } from "../dirselect";
 import { initNative } from "../native";
 import { applyReaderStyle, loadReaderStyle, RS_DEFAULT, type ReaderStyle } from "../reader";
-import { ConfirmCard, Group, Row, Segmented, Toggle, fmtTokens, prettyAccel } from "../ui";
+import { Group, Row, Segmented, Toggle, fmtTokens, prettyAccel } from "../ui";
+import { ModelsSection } from "./models";
 import type { HotkeyStatus, Prefs, Provider, UsageSummary } from "../types";
 import "../styles.css";
 
@@ -24,14 +24,6 @@ const SECTIONS: { id: Section; label: string; icon: string; color: string }[] = 
   { id: "usage", label: "用量", icon: "¥", color: "#34c759" },
 ];
 const asSection = (s: string): Section | null => (SECTIONS.some((x) => x.id === s) ? (s as Section) : null);
-
-// 预设 provider + 模型清单(2026-11 官网调研;模型可自由手填)
-const PRESETS: Record<string, { kind: string; base_url: string; models: string[]; model: string }> = {
-  DeepSeek: { kind: "openai_compatible", base_url: "https://api.deepseek.com", models: ["deepseek-flash", "deepseek-v4-pro", "deepseek-chat"], model: "deepseek-flash" },
-  GLM: { kind: "openai_compatible", base_url: "https://open.bigmodel.cn/api/paas/v4", models: ["glm-4.5-flash", "glm-4.6", "glm-4-flash"], model: "glm-4.5-flash" },
-  OpenAI: { kind: "openai_compatible", base_url: "https://api.openai.com/v1", models: ["gpt-5-mini", "gpt-5-nano", "gpt-5", "gpt-4o-mini"], model: "gpt-5-mini" },
-  Ollama: { kind: "ollama", base_url: "http://localhost:11434", models: ["qwen3:4b", "qwen3:8b", "gemma3:4b", "llama3.3"], model: "qwen3:4b" },
-};
 
 function SettingsApp() {
   const [section, setSection] = useState<Section>(() => asSection(location.hash.slice(1)) ?? "models");
@@ -127,143 +119,6 @@ function SettingsApp() {
       </main>
       {toast && <div className="fixed bottom-5 left-1/2 -translate-x-1/2 bg-t1 text-doc text-[12px] px-3.5 py-1.5 rounded-md z-[99] whitespace-nowrap">{toast}</div>}
     </div>
-  );
-}
-
-// ---------- 模型 ----------
-
-function ModelsSection({ providers, refreshProviders, say }: { providers: Provider[]; refreshProviders: () => Promise<void>; say: (m: string) => void }) {
-  const active = providers.find((p) => p.is_active);
-  const [selId, setSelId] = useState<number | null>(active?.id ?? providers[0]?.id ?? null);
-  useEffect(() => { if (selId == null && providers.length) setSelId(active?.id ?? providers[0].id); }, [providers]); // eslint-disable-line react-hooks/exhaustive-deps
-  const sel = providers.find((p) => p.id === selId) ?? null;
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
-  const [keyInput, setKeyInput] = useState("");
-  const [testing, setTesting] = useState(false);
-  const [testMsg, setTestMsg] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [cName, setCName] = useState("");
-  const [cUrl, setCUrl] = useState("");
-  const [cModel, setCModel] = useState("");
-  const [cKey, setCKey] = useState("");
-  const [delCand, setDelCand] = useState<Provider | null>(null);
-
-  useEffect(() => {
-    if (sel) { setBaseUrl(sel.base_url); setModel(sel.model); }
-    setKeyInput("");
-    setTestMsg(null);
-  }, [selId, sel?.base_url, sel?.model]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 预设:已配置 = 选中查看;未配置 = 新建(不再隐式激活,激活需「设为使用中」)
-  const pickPreset = async (name: string) => {
-    const existing = providers.find((p) => p.name === name);
-    if (existing) { setSelId(existing.id); return; }
-    const { kind, base_url, model } = PRESETS[name];
-    try {
-      const saved = await api.providerSave({ id: null, name, kind, base_url, model });
-      await refreshProviders();
-      setSelId(saved.id);
-      say(`已添加 ${name},填入 API 密钥后测试`);
-    } catch (e) { say(String(e)); }
-  };
-
-  const saveCustom = async () => {
-    const n = cName.trim();
-    if (!n || !cUrl.trim() || !cModel.trim()) { say("名称、地址、模型为必填"); return; }
-    try {
-      const saved = await api.providerSave({ id: null, name: n, kind: "openai_compatible", base_url: cUrl.trim(), model: cModel.trim() });
-      if (cKey.trim()) await api.providerSetKey(saved.id, cKey.trim());
-      await refreshProviders();
-      setSelId(saved.id);
-      setAdding(false); setCName(""); setCUrl(""); setCModel(""); setCKey("");
-      say(`已添加「${n}」`);
-    } catch (e) { say(String(e)); }
-  };
-
-  const save = async () => {
-    if (!sel) return;
-    try {
-      await api.providerSave({ id: sel.id, name: sel.name, kind: sel.kind, base_url: baseUrl, model });
-      if (keyInput.trim()) await api.providerSetKey(sel.id, keyInput.trim());
-      say(keyInput.trim() ? "已保存 · 密钥已写入钥匙串" : "已保存");
-      setKeyInput("");
-      await refreshProviders();
-    } catch (e) { say(String(e)); }
-  };
-
-  const test = async () => {
-    if (!sel) return;
-    setTesting(true); setTestMsg(null);
-    try { setTestMsg((await api.providerTest(sel.id)).message); } catch (e) { setTestMsg(String(e)); }
-    setTesting(false);
-  };
-
-  const dirty = !!sel && (baseUrl !== sel.base_url || model !== sel.model || !!keyInput.trim());
-  const presetModels = sel ? Object.values(PRESETS).find((d) => d.base_url === sel.base_url)?.models ?? [] : [];
-
-  return (
-    <>
-      <Group title="服务商">
-        <Row label="当前查看">
-          <select className="field !h-[22px] !text-[12px] max-w-[220px]" value={selId ?? ""} onChange={(e) => setSelId(Number(e.target.value))}>
-            {providers.map((p) => <option key={p.id} value={p.id}>{p.name}{p.is_active ? "(使用中)" : ""}</option>)}
-          </select>
-        </Row>
-        <Row label="添加预设">
-          {Object.keys(PRESETS).map((p) => (
-            <button key={p} className="pbtn" onClick={() => pickPreset(p)}>{providers.some((x) => x.name === p) ? "✓ " : ""}{p}</button>
-          ))}
-          <button className="pbtn" onClick={() => setAdding(!adding)}>自定义…</button>
-        </Row>
-      </Group>
-
-      {adding && (
-        <Group title="自定义服务商(OpenAI 兼容)">
-          <Row label="名称"><input className="field w-[260px]" value={cName} placeholder="如 SiliconFlow" onChange={(e) => setCName(e.target.value)} spellCheck={false} /></Row>
-          <Row label="地址"><input className="field mono w-[260px]" value={cUrl} placeholder="https://…/v1" onChange={(e) => setCUrl(e.target.value)} spellCheck={false} /></Row>
-          <Row label="模型"><input className="field mono w-[260px]" value={cModel} placeholder="如 Qwen/Qwen3-32B" onChange={(e) => setCModel(e.target.value)} spellCheck={false} /></Row>
-          <Row label="API 密钥"><input className="field mono w-[260px]" type="password" value={cKey} placeholder="可留空稍后填" onChange={(e) => setCKey(e.target.value)} spellCheck={false} /></Row>
-          <Row label=""><button className="btn" onClick={() => setAdding(false)}>取消</button><button className="btn primary" onClick={saveCustom}>添加</button></Row>
-        </Group>
-      )}
-
-      {sel ? (
-        <Group
-          title={sel.name}
-          foot={<span className="selectable">{testMsg ? <span className={testMsg.startsWith("✓") ? "text-ok" : "text-t2"}>{testMsg}</span> : sel.is_active ? "使用中" : "未使用"}{" · 请求 "}<span className="font-code">{baseUrl.replace(/\/+$/, "")}{sel.kind === "ollama" ? "/api/chat" : "/chat/completions"}</span></span>}
-        >
-          <Row label="地址"><input className="field mono w-[300px]" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} spellCheck={false} /></Row>
-          <Row label="API 密钥">
-            <input className="field mono w-[300px]" type="password" placeholder={sel.has_key ? "已存于钥匙串 · 输入以更换" : "sk-…(只存钥匙串)"} value={keyInput} onChange={(e) => setKeyInput(e.target.value)} spellCheck={false} />
-          </Row>
-          <Row label="模型">
-            <input className="field mono w-[300px]" value={model} onChange={(e) => setModel(e.target.value)} spellCheck={false} list={"models-" + sel.id} />
-            <datalist id={"models-" + sel.id}>{presetModels.map((m) => <option key={m} value={m} />)}</datalist>
-          </Row>
-          <Row label="">
-            {!PRESETS[sel.name] && <button className="btn danger" onClick={() => setDelCand(sel)}>删除</button>}
-            <button className="btn" disabled={testing} onClick={test}>{testing ? "测试中…" : "测试"}</button>
-            {!sel.is_active && (
-              <button className="btn" disabled={dirty} title={dirty ? "先保存修改" : undefined} onClick={() => api.providerSetActive(sel.id).then(refreshProviders).then(() => say(`已切换到 ${sel.name}`)).catch((e) => say(String(e)))}>设为使用中</button>
-            )}
-            <button className="btn primary" disabled={!dirty} onClick={save}>保存</button>
-          </Row>
-        </Group>
-      ) : (
-        <p className="text-[12px] text-t3 px-3">还没有服务商 · 从上方「添加预设」开始,粘贴 API 密钥即可翻译。</p>
-      )}
-      <p className="gf !px-3">密钥只存于系统钥匙串,不写入数据库,界面不回显完整密钥。</p>
-      {delCand && (
-        <ConfirmCard
-          title="删除服务商"
-          body={`「${delCand.name}」将被移除,钥匙串里的密钥也将无法再读取。`}
-          confirmText="删除"
-          onConfirm={() => api.providerDelete(delCand.id).then(refreshProviders).then(() => { setSelId(null); say(`已删除「${delCand.name}」`); }).catch((e) => say(String(e)))}
-          onClose={() => setDelCand(null)}
-        />
-      )}
-    </>
   );
 }
 

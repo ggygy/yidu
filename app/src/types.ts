@@ -39,8 +39,30 @@ export type StreamEvent =
   | { type: "block"; idx: number; text: string; terms: string }
   | { type: "partial"; idx: number; text: string }
   | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number }
+  | { type: "phase"; phase: Phase }
+  | { type: "thinking"; chars: number; tail: string }
+  | ({ type: "metrics" } & SessionMetrics)
   | { type: "done"; article_id: number }
   | { type: "error"; message: string };
+
+export type Phase = "conn" | "think" | "gen";
+
+/** 会话结束明细(Rust SessionMetrics;时间均相对会话开始,毫秒) */
+export interface SessionMetrics {
+  ttft_ms: number | null;
+  first_block_ms: number | null;
+  first_reasoning_ms: number | null;
+  last_content_ms: number | null;
+  total_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  reasoning_tokens: number;
+  requests: number;
+  batches: number;
+  blocks: number;
+  model: string;
+  cancelled: boolean;
+}
 
 /** 本次翻译会话累计用量(usage 事件按请求逐次累加) */
 export interface SessionUsage {
@@ -127,5 +149,16 @@ export interface GlossaryItem {
 export interface TestResult {
   ok: boolean;
   latency_ms: number;
+  kind: "ok" | "no_key" | "auth" | "model" | "network" | "other";
   message: string;
+}
+
+/** 设置页表单当前值(测试 / 拉模型用,未保存也可) */
+export interface ProviderForm {
+  id: number | null;
+  kind: string;
+  base_url: string;
+  model: string;
+  key?: string | null;
+  extra?: string | null;
 }

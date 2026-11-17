@@ -10,6 +10,7 @@ import { DirPicker } from "./dirselect";
 import { IS_MAC, initNative } from "./native";
 import { applyReaderStyle, loadReaderStyle, type ReaderStyle } from "./reader";
 import { ConfirmCard, Segmented, TbButton, fmtTokens } from "./ui";
+import { IDLE, LiveStatus, MetricsDetail, reduceLive, sec, startLive, type Live } from "./metrics";
 import { addUsage, EMPTY_USAGE } from "./types";
 import type { Article, Block, DictCard, GlossaryItem, Prefs, Provider, SessionUsage, StreamEvent, VocabEntry } from "./types";
 import "./styles.css";
@@ -241,6 +242,7 @@ function App() {
   const [termPop, setTermPop] = useState<{ hit: TermHit; x: number; y: number } | null>(null);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [sessUsage, setSessUsage] = useState<SessionUsage>(EMPTY_USAGE);
+  const [live, setLive] = useState<Live>(IDLE); // 阶段 / 计时 / 结束明细(§2.6.5–6)
   const sessionRef = useRef(0);
   const busyRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -353,6 +355,7 @@ function App() {
   const streamArticleRef = useRef(-1);
 
   const onStreamEvent = (e: StreamEvent) => {
+    setLive((l) => reduceLive(l, e));
     if (e.type === "created") {
       streamArticleRef.current = e.article_id;
       setDoc({ article: e.article, blocks: e.blocks });
@@ -387,6 +390,7 @@ function App() {
     const effDir = direction === "auto" ? detectDir(draft) : direction;
     try {
       setSessUsage(EMPTY_USAGE);
+      setLive(startLive());
       sessionRef.current = await api.translate({ text: draft, direction: effDir, kind: "md" }, onStreamEvent);
       setDraft("");
       setStreamErr(null);
@@ -401,6 +405,7 @@ function App() {
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
     try {
       setSessUsage(EMPTY_USAGE);
+      setLive(startLive());
       sessionRef.current = await api.translate({ text: "", article_id: doc.article.id, direction: doc.article.direction, kind: "resume" }, onStreamEvent);
       setStreamErr(null);
       markBusy(true);
@@ -412,6 +417,7 @@ function App() {
     if (!sessionRef.current) return;
     try { await api.cancelTranslate(sessionRef.current); } catch {}
     markBusy(false);
+    setLive((l) => ({ ...l, running: false }));
     say("已取消 · 未完成块可续译");
   };
 
@@ -465,7 +471,6 @@ function App() {
     );
 
   const price = prefs?.price_per_mtok ?? 0;
-  const sessCost = price && sessUsage.requests ? (((sessUsage.prompt_tokens + sessUsage.completion_tokens) / 1_000_000) * price) : 0;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden mat" onClick={() => { setVocab(null); setTermPop(null); }}>
@@ -477,9 +482,10 @@ function App() {
         <span className="flex-1 min-w-[12px] self-stretch" data-tauri-drag-region />
         {doc && !inspOpen && !composing && (
           <span className="flex items-center gap-2 text-[11px] text-t3 whitespace-nowrap flex-none" title={`${doneCount}/${blocks.length} 块`}>
-            {busy && <i className="w-1.5 h-1.5 rounded-full bg-accent [animation:breathe_1.2s_infinite]" />}
+            {busy && live.running && <LiveStatus live={live} />}
             <span className="w-[64px] h-[5px] rounded-full bg-fill2 overflow-hidden"><i className="block h-full bg-accent transition-[width] duration-500" style={{ width: `${progress}%` }} /></span>
-            {doneCount}/{blocks.length}{sessUsage.requests ? ` · ${fmtTokens(sessUsage.completion_tokens)} tok` : ""}
+            {doneCount}/{blocks.length}
+            {!busy && live.metrics ? ` · 首字 ${sec(live.metrics.ttft_ms)} · 总 ${sec(live.metrics.total_ms)}` : sessUsage.requests ? ` · ${fmtTokens(sessUsage.completion_tokens)} tok` : ""}
           </span>
         )}
         <span className="flex items-center gap-0.5 flex-none">
@@ -685,12 +691,21 @@ function App() {
               </>
             ) : <p className="text-t3 m-0">未打开文章</p>}
             <h5 className="text-[11px] font-semibold text-t3 m-0 mt-4 mb-1.5">本次翻译</h5>
-            <KV k="模型" v={activeProvider?.model ?? "未配置"} />
-            <KV k="请求" v={sessUsage.requests ? `${sessUsage.requests} 次` : "—"} />
-            <KV k="输入" v={sessUsage.requests ? sessUsage.prompt_tokens.toLocaleString() : "—"} />
-            <KV k="输出" v={sessUsage.requests ? sessUsage.completion_tokens.toLocaleString() : "—"} />
-            {sessUsage.reasoning_tokens > 0 && <KV k="其中思考" v={sessUsage.reasoning_tokens.toLocaleString()} />}
-            {sessCost > 0 && <KV k="成本" v={`≈ ¥${sessCost.toFixed(4)}`} />}
+            {live.running ? (
+              <>
+                <div className="text-[12px] text-t2 py-1"><LiveStatus live={live} /></div>
+                {live.thinkTail && <p className="selectable text-[11px] text-t3 leading-snug m-0 line-clamp-4">…{live.thinkTail}</p>}
+                <KV k="输入" v={sessUsage.requests ? sessUsage.prompt_tokens.toLocaleString() : "—"} />
+                <KV k="输出" v={sessUsage.requests ? sessUsage.completion_tokens.toLocaleString() : "—"} />
+              </>
+            ) : live.metrics ? (
+              <MetricsDetail m={live.metrics} price={price} thinkTail={live.thinkTail} />
+            ) : (
+              <>
+                <KV k="模型" v={activeProvider?.model ?? "未配置"} />
+                <p className="text-t3 m-0 mt-1">翻译后显示首字、耗时、速度与成本</p>
+              </>
+            )}
             <h5 className="text-[11px] font-semibold text-t3 m-0 mt-4 mb-1.5">术语命中</h5>
             {termHitsInDoc.length ? termHitsInDoc.map(([f, t]) => <KV key={f} k={f} v={t} />) : <p className="text-t3 m-0">无</p>}
           </div>

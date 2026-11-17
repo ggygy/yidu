@@ -5,7 +5,11 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 /// 需注入的字段:(顶层字段名, 值)
-pub type ThinkingParam = (&'static str, Value);
+pub type ThinkingParam = (String, Value);
+
+fn tp(field: &str, v: Value) -> Option<ThinkingParam> {
+    Some((field.to_string(), v))
+}
 
 fn host_of(base_url: &str) -> String {
     let s = base_url.trim();
@@ -28,11 +32,32 @@ fn is_openai_reasoning_model(model: &str) -> bool {
     o_series || gpt5
 }
 
-/// extra JSON 里是否已标「不支持」(或用户显式选择不注入)
-fn disabled_by_extra(extra: &str) -> bool {
-    let Ok(v) = serde_json::from_str::<Value>(extra) else { return false };
+/// extra JSON 里是否已标「不支持」
+fn unsupported_by_extra(v: &Value) -> bool {
     v.get("thinking_unsupported").and_then(|b| b.as_bool()) == Some(true)
-        || v.get("thinking_control").and_then(|s| s.as_str()) == Some("none")
+}
+
+/// 用户在设置里显式选的思考控制(§2.3.9):Some(None) = 不注入;Some(Some(p)) = 注入 p;None = 自动(按 host)
+fn explicit_control(v: &Value) -> Option<Option<ThinkingParam>> {
+    match v.get("thinking_control").and_then(|s| s.as_str()).unwrap_or("auto") {
+        "none" => Some(None),
+        "deepseek" => Some(tp("thinking", json!({ "type": "disabled" }))),
+        "qwen" => Some(tp("enable_thinking", json!(false))),
+        "openai" => Some(tp("reasoning_effort", json!("none"))),
+        "ollama" => Some(tp("think", json!(false))),
+        "custom" => {
+            // 自定义 JSON:单个顶层字段,如 {"think": false}
+            let raw = v.get("thinking_custom").and_then(|s| s.as_str()).unwrap_or("");
+            let obj = serde_json::from_str::<Value>(raw).ok();
+            Some(obj.as_ref().and_then(|o| o.as_object()).and_then(|m| m.iter().next()).map(|(k, val)| (k.clone(), val.clone())))
+        }
+        _ => None,
+    }
+}
+
+/// 设置里切换思考控制后:清进程内「不支持」标记,下一次请求重新探测
+pub fn clear_unsupported(provider_id: i64) {
+    unsupported_set().lock().unwrap().remove(&provider_id);
 }
 
 /// 进程内已探明不支持的 provider(写回 extra 之前/之外的兜底,避免同会话反复 400)
@@ -51,26 +76,32 @@ fn known_unsupported(provider_id: i64) -> bool {
 
 /// 决定注入什么。kind = providers.kind("openai_compatible" | "ollama")
 pub fn param_for(provider_id: i64, kind: &str, base_url: &str, model: &str, extra: &str) -> Option<ThinkingParam> {
-    if disabled_by_extra(extra) || known_unsupported(provider_id) {
+    let ex = serde_json::from_str::<Value>(extra).unwrap_or(Value::Null);
+    // 显式选择优先(用户刚改过,自会重新探测);随后才看「已探明不支持」
+    if let Some(p) = explicit_control(&ex) {
+        return p;
+    }
+    if unsupported_by_extra(&ex) || known_unsupported(provider_id) {
         return None;
     }
+    auto_for(kind, base_url, model)
+}
+
+/// 自动档:按 host 白名单(§2.6.1);其他 host 不注入
+pub fn auto_for(kind: &str, base_url: &str, model: &str) -> Option<ThinkingParam> {
     if kind == "ollama" {
         // gpt-oss 只认 low/medium/high,布尔被忽略
-        return Some(if model.to_ascii_lowercase().contains("gpt-oss") {
-            ("think", json!("low"))
-        } else {
-            ("think", json!(false))
-        });
+        return if model.to_ascii_lowercase().contains("gpt-oss") { tp("think", json!("low")) } else { tp("think", json!(false)) };
     }
     let host = host_of(base_url);
     if host_is(&host, "deepseek.com") || host_is(&host, "bigmodel.cn") || host_is(&host, "z.ai") {
-        return Some(("thinking", json!({ "type": "disabled" })));
+        return tp("thinking", json!({ "type": "disabled" }));
     }
     if host_is(&host, "dashscope.aliyuncs.com") || host_is(&host, "dashscope-intl.aliyuncs.com") {
-        return Some(("enable_thinking", json!(false)));
+        return tp("enable_thinking", json!(false));
     }
     if host_is(&host, "openai.com") && is_openai_reasoning_model(model) {
-        return Some(("reasoning_effort", json!("none")));
+        return tp("reasoning_effort", json!("none"));
     }
     None
 }
@@ -115,19 +146,19 @@ mod tests {
     fn whitelist_injection() {
         assert_eq!(
             param_for(1, "openai_compatible", "https://api.deepseek.com", "deepseek-flash", "{}"),
-            Some(("thinking", json!({"type":"disabled"})))
+            tp("thinking", json!({"type":"disabled"}))
         );
         assert_eq!(
             param_for(1, "openai_compatible", "https://open.bigmodel.cn/api/paas/v4", "glm-4.5-flash", "{}").map(|p| p.0),
-            Some("thinking")
+            Some("thinking".to_string())
         );
         assert_eq!(
             param_for(1, "openai_compatible", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3-8b", "{}"),
-            Some(("enable_thinking", json!(false)))
+            tp("enable_thinking", json!(false))
         );
         assert_eq!(
             param_for(1, "openai_compatible", "https://api.openai.com/v1", "gpt-5.1", "{}"),
-            Some(("reasoning_effort", json!("none")))
+            tp("reasoning_effort", json!("none"))
         );
         // 非推理模型 / 未知 host:不注入
         assert_eq!(param_for(1, "openai_compatible", "https://api.openai.com/v1", "gpt-4o", "{}"), None);
@@ -136,8 +167,8 @@ mod tests {
         // 仿冒域名不命中
         assert_eq!(param_for(1, "openai_compatible", "https://notdeepseek.com", "x", "{}"), None);
         // Ollama
-        assert_eq!(param_for(1, "ollama", "http://localhost:11434", "qwen3:4b", "{}"), Some(("think", json!(false))));
-        assert_eq!(param_for(1, "ollama", "http://localhost:11434", "gpt-oss:20b", "{}"), Some(("think", json!("low"))));
+        assert_eq!(param_for(1, "ollama", "http://localhost:11434", "qwen3:4b", "{}"), tp("think", json!(false)));
+        assert_eq!(param_for(1, "ollama", "http://localhost:11434", "gpt-oss:20b", "{}"), tp("think", json!("low")));
     }
 
     #[test]
@@ -148,6 +179,26 @@ mod tests {
         );
         mark_unsupported(424242);
         assert_eq!(param_for(424242, "openai_compatible", "https://api.deepseek.com", "m", "{}"), None);
+    }
+
+    #[test]
+    fn explicit_control_overrides_host() {
+        // ada 一类自定义 host:默认不注入;显式选 DeepSeek 式 → 注入;不注入 → 即便是 deepseek.com 也不注入
+        assert_eq!(param_for(7, "openai_compatible", "https://ada.example.com/v1", "m", "{}"), None);
+        assert_eq!(
+            param_for(7, "openai_compatible", "https://ada.example.com/v1", "m", r#"{"thinking_control":"deepseek"}"#),
+            tp("thinking", json!({"type":"disabled"}))
+        );
+        assert_eq!(param_for(7, "openai_compatible", "https://api.deepseek.com", "m", r#"{"thinking_control":"none"}"#), None);
+        assert_eq!(
+            param_for(7, "openai_compatible", "https://x.example", "m", r#"{"thinking_control":"custom","thinking_custom":"{\"think\": false}"}"#),
+            tp("think", json!(false))
+        );
+        // 显式选择不受「已探明不支持」影响
+        assert_eq!(
+            param_for(7, "openai_compatible", "https://x.example", "m", r#"{"thinking_control":"qwen","thinking_unsupported":true}"#),
+            tp("enable_thinking", json!(false))
+        );
     }
 
     #[test]
