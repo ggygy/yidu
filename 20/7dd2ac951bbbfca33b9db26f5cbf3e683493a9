@@ -1,0 +1,176 @@
+.scratch/v03-polish/issues/01-baseline-repro.md
+  s_4d4673cc993b4c::t_f528a07482e12b 1-2,6,8-10
+  s_4d4673cc993b4c::t_9cce2e22e4c607 4
+  s_4d4673cc993b4c::t_54bfdd6233f8ad 3,5
+  s_4d4673cc993b4c::t_5609c7c4387cd1 11
+  s_4d4673cc993b4c::t_53c8244e2ebce4 7
+  s_4d4673cc993b4c::t_c71b32db7b8053 12-21
+.scratch/v03-polish/issues/04-md-fidelity.md
+  s_4d4673cc993b4c::t_803d64dedb3134 4,11-24
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,7-10
+  s_4d4673cc993b4c::t_d879c2d78a6a71 5-6
+.scratch/v03-polish/research/lang-detect-bench/heuristic.mjs
+  s_4d4673cc993b4c::t_915af5e40e4077 44
+  s_4d4673cc993b4c::t_c8453d997043c9 1-43,45-115
+.scratch/v03-polish/research/lang-detect-bench/samples.mjs
+  s_4d4673cc993b4c::t_966a34a43ec0ef 1-66
+.scratch/v03-polish/research/lang-detect-bench/tables.mjs
+  s_4d4673cc993b4c::t_81c5d3d52d2847 1-15
+.scratch/v03-polish/research/05-streaming-latency.md
+  s_4d4673cc993b4c::t_09904efa8ee867 1-161
+.scratch/v03-polish/issues/12-visual-language.md
+  s_4d4673cc993b4c::t_f1f744bb22a3f8 5
+  s_4d4673cc993b4c::t_d515182c1fc8c3 1-3,6-10
+.scratch/v03-polish/issues/10-write-spec.md
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,7-9
+  s_4d4673cc993b4c::t_d515182c1fc8c3 10
+  s_4d4673cc993b4c::t_95fd86bd7cbe4b 5
+  s_4d4673cc993b4c::t_9cce2e22e4c607 4,11-14
+.scratch/v03-polish/proto-visual/index.html
+  s_4d4673cc993b4c::t_62023e0b218cdc 1-171,173-174,176-187,189-199,208,210-212,214-352,354,356-367,371-372,374-394,397-412,414-418
+  s_4d4673cc993b4c::t_3f46ceb0811ab5 172,175,188,200-207,209,213,353,355,368-370,373,395-396,413
+.scratch/v03-polish/baseline/ticket-01-partial-results.json
+  s_17d8f4037216c1::t_d5afda00575d3b 1-138
+.scratch/v03-polish/issues/09-readability-view.md
+  s_4d4673cc993b4c::t_d515182c1fc8c3 6
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,7-10
+  s_4d4673cc993b4c::t_ed083d08be09c7 4,11-22
+  s_4d4673cc993b4c::t_2c495f589118e6 5
+.scratch/v03-polish/research/02-lang-detect.md
+  s_4d4673cc993b4c::t_cbc02b95d212dc 1-100,102-157
+  s_4d4673cc993b4c::t_eef2c107513313 101
+.scratch/v03-polish/research/lang-detect-bench/lib/franc-min/index.js
+  s_4d4673cc993b4c::t_057489f0988211 1-350
+.scratch/v03-polish/proto-reading/index.html
+  s_4d4673cc993b4c::t_15dce205957c29 22,78
+  s_4d4673cc993b4c::t_506173ce34bdc9 1-21,23-77,79-209
+.scratch/v03-polish/research/latency-bench/bench.mjs
+  s_4d4673cc993b4c::t_91246aacd1377d 1-62
+.scratch/v03-polish/spec-v0.3.md
+  s_4d4673cc993b4c::t_9cce2e22e4c607 3
+  s_4d4673cc993b4c::t_77efb4067ab4e2 1-2,4-211
+.scratch/v03-polish/research/lang-detect-bench/results/conf.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-22
+.scratch/v03-polish/issues/06-metrics-display.md
+  s_4d4673cc993b4c::t_d2facfe1bb0409 5
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,7-10
+  s_4d4673cc993b4c::t_3cce9e9cd5edba 4,11-20
+  s_4d4673cc993b4c::t_d515182c1fc8c3 6
+.scratch/v03-polish/research/lang-detect-bench/results/tables.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-4
+.scratch/v03-polish/proto-md/roundtrip.mjs
+  s_4d4673cc993b4c::t_28f12c91593d5a 1-148
+.scratch/v03-polish/research/lang-detect-bench/holdout.mjs
+  s_4d4673cc993b4c::t_e81cffad69799b 1-35
+.scratch/v03-polish/research/lang-detect-bench/results/sizes.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-11
+.scratch/v03-polish/issues/02-lang-detect-research.md
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,5-9
+  s_4d4673cc993b4c::t_a69fe6e65ba990 4,10-29
+.scratch/v03-polish/issues/03-auto-direction-rules.md
+  s_4d4673cc993b4c::t_855fc3d74ec939 4,11-23
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,6-10
+  s_4d4673cc993b4c::t_b29ec7b592669b 5
+.scratch/v03-polish/research/lang-detect-bench/lib/franc-min/expressions.js
+  s_4d4673cc993b4c::t_057489f0988211 1-28
+.scratch/v03-polish/research/lang-detect-bench/bench.mjs
+  s_4d4673cc993b4c::t_de77b4c2738532 6,38
+  s_4d4673cc993b4c::t_6057dbcd681b7c 1,4,7-36,46-94,97
+  s_4d4673cc993b4c::t_e81cffad69799b 3
+  s_4d4673cc993b4c::t_6593e9b642898f 2
+  s_4d4673cc993b4c::t_faf6fedad60a8a 5,37,39-45,95-96
+.scratch/v03-polish/research/lang-detect-bench/package.json
+  s_4d4673cc993b4c::t_c175f9c9e19ad7 1
+.scratch/v03-polish/issues/11-visual-audit.md
+  s_4d4673cc993b4c::t_82517fc9c2dfb8 5
+  s_4d4673cc993b4c::t_53c8244e2ebce4 4,11-26
+  s_4d4673cc993b4c::t_d515182c1fc8c3 1-3,6-10
+.scratch/v03-polish/issues/07-provider-config-redo.md
+  s_4d4673cc993b4c::t_6b36f9de16a327 4,11-25
+  s_4d4673cc993b4c::t_7545f5436d928a 5
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,6-10
+.scratch/v03-polish/research/lang-detect-bench/results/set1-dev.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-202
+.scratch/v03-polish/research/13-native-look.md
+  s_4d4673cc993b4c::t_878513e2bf4ff4 1-220,222-334
+  s_4d4673cc993b4c::t_3eb3fa84c201c7 221
+.scratch/v03-polish/research/lang-detect-bench/sizes.mjs
+  s_4d4673cc993b4c::t_933b9fc872d903 1-22
+.scratch/v03-polish/research/11-visual-audit.md
+  s_4d4673cc993b4c::t_440da86338d311 1-190,192,196
+  s_4d4673cc993b4c::t_e671551fd9e8e3 191,193-195,197
+.scratch/v03-polish/proto-config/index.html
+  s_4d4673cc993b4c::t_b95157d4b0286e 1-236
+.scratch/v03-polish/research/lang-detect-bench/lib/franc-min/data.js
+  s_4d4673cc993b4c::t_057489f0988211 1-77
+.scratch/v03-polish/proto-metrics/index.html
+  s_4d4673cc993b4c::t_526e8f8ca87d8b 1-210
+.scratch/v03-polish/research/04-md-fidelity.md
+  s_4d4673cc993b4c::t_a5c3954de36f48 1-47
+.scratch/v03-polish/map.md
+  s_4d4673cc993b4c::t_9cce2e22e4c607 9-10,39,61
+  s_4d4673cc993b4c::t_f528a07482e12b 1-6,8,11-12,14-15,17-28,31-38,52-60
+  s_4d4673cc993b4c::t_ed083d08be09c7 44
+  s_4d4673cc993b4c::t_3f615de3aadfb3 29,47
+  s_4d4673cc993b4c::t_803d64dedb3134 41
+  s_4d4673cc993b4c::t_3cce9e9cd5edba 43
+  s_4d4673cc993b4c::t_6b36f9de16a327 45
+  s_4d4673cc993b4c::t_855fc3d74ec939 46
+  s_4d4673cc993b4c::t_1aa57d6c101e4a 50-51
+  s_4d4673cc993b4c::t_62332d4ba455a5 40
+  s_4d4673cc993b4c::t_5609c7c4387cd1 42
+  s_4d4673cc993b4c::t_d515182c1fc8c3 7,16
+  s_4d4673cc993b4c::t_53c8244e2ebce4 30,49
+.scratch/v03-polish/research/lang-detect-bench/heuristic_v2.mjs
+  s_4d4673cc993b4c::t_643e5dbea94600 1-120
+.scratch/v03-polish/research/lang-detect-bench/all.mjs
+  s_4d4673cc993b4c::t_6593e9b642898f 1-4
+.scratch/v03-polish/research/lang-detect-bench/holdout2.mjs
+  s_4d4673cc993b4c::t_a71de8e75592c8 1-26
+.scratch/v03-polish/research/lang-detect-bench/heuristic_v2_static.mjs
+  s_4d4673cc993b4c::t_de77b4c2738532 1-122
+.scratch/v03-polish/research/lang-detect-bench/results/set3-holdout2.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-98
+.scratch/v03-polish/issues/13-native-look-feasibility.md
+  s_4d4673cc993b4c::t_3eb3fa84c201c7 4-20
+.scratch/v03-polish/research/lang-detect-bench/results/all.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-259
+.scratch/v03-polish/issues/05-streaming-latency-research.md
+  s_4d4673cc993b4c::t_741e4599684a7d 4,10-19
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,5-9
+.scratch/v03-polish/issues/08-quick-window-summon.md
+  s_4d4673cc993b4c::t_f528a07482e12b 1-3,7-10
+  s_4d4673cc993b4c::t_5609c7c4387cd1 4,11-25
+  s_4d4673cc993b4c::t_38bf358833a65c 5-6
+.scratch/v03-polish/research/lang-detect-bench/conf.mjs
+  s_4d4673cc993b4c::t_6593e9b642898f 1-19
+.scratch/v03-polish/research/12-visual-language.md
+  s_4d4673cc993b4c::t_66f81dc4c191d9 1-14,16-54,56-92
+  s_4d4673cc993b4c::t_3f615de3aadfb3 15,55
+.scratch/v03-polish/research/lang-detect-bench/results/set2-holdout1.txt
+  s_4d4673cc993b4c::t_60b295d89dfc24 1-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "207dd2ac951bbbfca33b9db26f5cbf3e683493a9",
+  "prompts": {},
+  "sessions": {
+    "s_17d8f4037216c1": {
+      "agent_id": {
+        "tool": "chengxiaobang",
+        "id": "s_fc92vo5xffs8",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    },
+    "s_4d4673cc993b4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e30b449d-cf10-4e4e-8619-4fa650db551a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
