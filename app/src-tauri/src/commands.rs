@@ -288,6 +288,8 @@ pub struct PrefsStored {
     pub quick_scale: Option<f64>,      // v0.3 §2.5.6:快捷窗译文缩放 0.8–1.5(⌘± / ⌘0)
     pub main_scale: Option<f64>,       // 主窗译文缩放
     pub density: Option<String>,       // compact | standard | loose
+    pub concurrency: Option<u8>,       // 并发批次 1–3(§2.6.3;Ollama 恒 1)
+    pub cached_price_per_mtok: Option<f64>, // 缓存命中输入的单价(¥/1M);未填 = 按普通单价算
 }
 
 #[derive(Serialize, Clone)]
@@ -304,6 +306,8 @@ pub struct PrefsEffective {
     pub quick_scale: f64,
     pub main_scale: f64,
     pub density: String,
+    pub concurrency: u8,
+    pub cached_price_per_mtok: Option<f64>,
 }
 
 pub fn load_prefs(db: &crate::db::Db) -> Result<PrefsStored, String> {
@@ -345,6 +349,8 @@ pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
             Some(d @ ("compact" | "loose")) => d.to_string(),
             _ => "standard".into(),
         },
+        concurrency: p.concurrency.unwrap_or(3).clamp(1, 3),
+        cached_price_per_mtok: p.cached_price_per_mtok.filter(|v| v.is_finite() && *v > 0.0),
     }
 }
 
@@ -402,6 +408,12 @@ pub fn apply_prefs_update(app: &tauri::AppHandle, state: &AppState, update: Pref
     }
     if let Some(v) = &update.density {
         stored.density = Some(v.clone());
+    }
+    if update.concurrency.is_some() {
+        stored.concurrency = update.concurrency;
+    }
+    if update.cached_price_per_mtok.is_some() {
+        stored.cached_price_per_mtok = update.cached_price_per_mtok;
     }
     // 热键变更:Rust 侧重注册
     let new_hotkey = effective_prefs(&stored).hotkey;
@@ -506,6 +518,7 @@ pub struct UsageReport {
     pub month_prompt: i64,
     pub month_completion: i64,
     pub month_reasoning: i64,
+    pub month_cached: i64,
     pub models: Vec<ModelStat>,
     pub recent: Vec<crate::db::UsageRow>,
 }
@@ -532,7 +545,7 @@ fn median(mut v: Vec<i64>) -> Option<i64> {
 pub async fn usage_report(state: State<'_, AppState>, month_start: i64) -> Result<UsageReport, String> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (month_requests, month_prompt, month_completion, month_reasoning) = db.usage_since(month_start).map_err(err)?;
+        let (month_requests, month_prompt, month_completion, month_reasoning, month_cached) = db.usage_since(month_start).map_err(err)?;
         let pool = db.usage_recent(400).map_err(err)?;
         let mut order: Vec<String> = Vec::new();
         let mut by: std::collections::HashMap<String, Vec<&crate::db::UsageRow>> = Default::default();
@@ -559,7 +572,7 @@ pub async fn usage_report(state: State<'_, AppState>, month_start: i64) -> Resul
             })
             .collect();
         let recent = pool.into_iter().take(20).collect();
-        Ok(UsageReport { month_requests, month_prompt, month_completion, month_reasoning, models, recent })
+        Ok(UsageReport { month_requests, month_prompt, month_completion, month_reasoning, month_cached, models, recent })
     })
     .await
     .map_err(err)?

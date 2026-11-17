@@ -736,7 +736,7 @@ function App() {
                 <KV k="输出" v={sessUsage.requests ? sessUsage.completion_tokens.toLocaleString() : "—"} />
               </>
             ) : live.metrics ? (
-              <MetricsDetail m={live.metrics} price={price} thinkTail={live.thinkTail} />
+              <MetricsDetail m={live.metrics} price={price} cachedPrice={prefs?.cached_price_per_mtok} thinkTail={live.thinkTail} />
             ) : (
               <>
                 <KV k="模型" v={activeProvider?.model ?? "未配置"} />

@@ -8,7 +8,8 @@ pub enum SsePayload {
     /// 思考文本(`delta.reasoning_content` / `delta.reasoning` / Ollama `message.thinking`):
     /// 绝不进 `</t>` 状态机与译文;M1 仅用于计时埋点(首 reasoning)
     Reasoning(String),
-    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
+    /// cached_tokens:输入中命中服务商前缀缓存的部分(OpenAI / Qwen `prompt_tokens_details.cached_tokens`,DeepSeek `prompt_cache_hit_tokens`)
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64 },
     /// choices[0].finish_reason(stop/length 等,随最后一个内容 chunk 到达)
     Finish(String),
     Done,
@@ -78,7 +79,12 @@ fn parse_data_line(line: &str) -> Vec<SsePayload> {
             .pointer("/completion_tokens_details/reasoning_tokens")
             .and_then(|x| x.as_i64())
             .unwrap_or(0);
-        out.push(SsePayload::Usage { prompt_tokens: pt, completion_tokens: ct, reasoning_tokens: rt });
+        let cached = u
+            .pointer("/prompt_tokens_details/cached_tokens")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0)
+            .max(u.get("prompt_cache_hit_tokens").and_then(|x| x.as_i64()).unwrap_or(0));
+        out.push(SsePayload::Usage { prompt_tokens: pt, completion_tokens: ct, reasoning_tokens: rt, cached_tokens: cached });
     }
     out
 }
@@ -170,7 +176,7 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                SsePayload::Usage { prompt_tokens: 10, completion_tokens: 5, reasoning_tokens: 0 },
+                SsePayload::Usage { prompt_tokens: 10, completion_tokens: 5, reasoning_tokens: 0, cached_tokens: 0 },
                 SsePayload::Done,
             ]
         );
@@ -195,7 +201,7 @@ mod tests {
             vec![
                 SsePayload::Delta("尾</t>".into()),
                 SsePayload::Finish("stop".into()),
-                SsePayload::Usage { prompt_tokens: 7, completion_tokens: 3, reasoning_tokens: 2 },
+                SsePayload::Usage { prompt_tokens: 7, completion_tokens: 3, reasoning_tokens: 2, cached_tokens: 0 },
             ]
         );
     }
@@ -264,5 +270,14 @@ mod tests {
         let mut m = TagStateMachine::new();
         let out = m.feed("<t id=\"1\">保留 <s>旧</s> 新</t>");
         assert_eq!(out, vec![Tagged { id: 1, text: "保留 <s>旧</s> 新".into() }]);
+    }
+
+    #[test]
+    fn sse_cached_tokens_both_shapes() {
+        let mut p = SseParser::new();
+        let out = p.feed("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":40,\"prompt_cache_hit_tokens\":256,\"prompt_cache_miss_tokens\":244}}\n");
+        assert_eq!(out, vec![SsePayload::Usage { prompt_tokens: 500, completion_tokens: 40, reasoning_tokens: 0, cached_tokens: 256 }]);
+        let out = p.feed("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":1024}}}\n");
+        assert_eq!(out, vec![SsePayload::Usage { prompt_tokens: 1200, completion_tokens: 9, reasoning_tokens: 0, cached_tokens: 1024 }]);
     }
 }

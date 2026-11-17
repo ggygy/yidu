@@ -157,6 +157,11 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         )?;
         conn.pragma_update(None, "user_version", 5)?;
     }
+    if version < 6 {
+        // v6:输入中命中服务商前缀缓存的 token(用量页 / 成本估算)
+        conn.execute_batch("ALTER TABLE usage_log ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;")?;
+        conn.pragma_update(None, "user_version", 6)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -238,6 +243,7 @@ pub struct UsageRecord {
     pub first_block_ms: Option<i64>,
     pub first_byte_ms: Option<i64>,
     pub reasoning_tokens: i64,
+    pub cached_tokens: i64,
     pub batch_blocks: i64,
     pub batch_chars: i64,
     pub model: String,
@@ -254,6 +260,7 @@ pub struct UsageRow {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub reasoning_tokens: i64,
+    pub cached_tokens: i64,
 }
 
 // ---------- 文章 ----------
@@ -698,8 +705,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO usage_log(provider_id, article_id, kind, prompt_tokens, completion_tokens, latency_ms,
-                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model, cached_tokens)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 u.provider_id,
                 u.article_id,
@@ -714,7 +721,8 @@ impl Db {
                 u.batch_blocks,
                 u.batch_chars,
                 now(),
-                u.model
+                u.model,
+                u.cached_tokens
             ],
         )?;
         Ok(())
@@ -745,14 +753,14 @@ impl Db {
         )?)
     }
 
-    /// 自 since(unix 秒)以来的翻译请求合计:(请求, 输入, 输出, 思考)
-    pub fn usage_since(&self, since: i64) -> Result<(i64, i64, i64, i64)> {
+    /// 自 since(unix 秒)以来的翻译请求合计:(请求, 输入, 输出, 思考, 缓存命中)
+    pub fn usage_since(&self, since: i64) -> Result<(i64, i64, i64, i64, i64)> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(reasoning_tokens),0)
+            "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(cached_tokens),0)
              FROM usage_log WHERE kind='translate' AND created_at >= ?1",
             params![since],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?)
     }
 
@@ -760,7 +768,7 @@ impl Db {
     pub fn usage_recent(&self, n: i64) -> Result<Vec<UsageRow>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT u.created_at, u.model, COALESCE(p.name, ''), u.ttft_ms, u.latency_ms, u.prompt_tokens, u.completion_tokens, u.reasoning_tokens
+            "SELECT u.created_at, u.model, COALESCE(p.name, ''), u.ttft_ms, u.latency_ms, u.prompt_tokens, u.completion_tokens, u.reasoning_tokens, u.cached_tokens
              FROM usage_log u LEFT JOIN providers p ON p.id = u.provider_id
              WHERE u.kind='translate' ORDER BY u.id DESC LIMIT ?1",
         )?;
@@ -774,6 +782,7 @@ impl Db {
                 prompt_tokens: r.get(5)?,
                 completion_tokens: r.get(6)?,
                 reasoning_tokens: r.get(7)?,
+                cached_tokens: r.get(8)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -819,7 +828,7 @@ mod tests {
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].model, "m2");
         assert_eq!(recent[1].ttft_ms, Some(700));
-        let (n, _, c, r) = db.usage_since(0).unwrap();
+        let (n, _, c, r, _) = db.usage_since(0).unwrap();
         assert_eq!((n, c, r), (2, 10, 4));
     }
 
@@ -840,12 +849,13 @@ mod tests {
             batch_blocks: 1,
             batch_chars: 42,
             model: "m".into(),
+            cached_tokens: 0,
         })
         .unwrap();
         {
             let conn = db.conn.lock().unwrap();
             let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 5);
+            assert_eq!(v, 6);
             let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
                 .query_row(
                     "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",

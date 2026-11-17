@@ -527,7 +527,7 @@ function QuickApp() {
           : <button className={"btn " + (input.trim() !== lastSrc.trim() || !blocks.length ? "primary" : "")} disabled={!input.trim() || !active} onClick={() => fire()} title="⌘↩">{blocks.length && input.trim() === lastSrc.trim() ? "重新翻译" : "翻译"}</button>}
         {infoOpen && live.metrics && (
           <div className="menu absolute z-40 bottom-full mb-1 left-2 w-[280px] !p-3" onClick={(e) => e.stopPropagation()}>
-            <MetricsDetail m={live.metrics} price={prefs?.price_per_mtok} thinkTail={live.thinkTail} />
+            <MetricsDetail m={live.metrics} price={prefs?.price_per_mtok} cachedPrice={prefs?.cached_price_per_mtok} thinkTail={live.thinkTail} />
           </div>
         )}
       </div>

@@ -25,7 +25,7 @@ pub enum StreamEvent {
     /// format_warn:结构签名不一致(自动重译一次后仍不一致)时的说明,空 = 正常
     Block { idx: usize, text: String, terms: String, format_warn: String },
     Partial { idx: usize, text: String },
-    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64 },
     /// 阶段(§2.6.5):conn 连接 / think 思考 / gen 生成
     Phase { phase: String },
     /// 思考进度(思考关不掉时;≥100ms 节流):累计字数 + 末尾约 200 字。思考文本绝不进译文
@@ -50,6 +50,7 @@ pub struct SessionMetrics {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub reasoning_tokens: i64,
+    pub cached_tokens: i64,
     pub requests: i64,
     pub batches: i64,
     pub blocks: i64,
@@ -152,7 +153,10 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
 
     let (from, to) = prompt::direction_parts(&req.direction);
     let stored = crate::commands::load_prefs(&db).map_err(|e| anyhow!(e))?;
-    let custom_prompt = crate::commands::effective_prefs(&stored).custom_prompt;
+    let eff_prefs = crate::commands::effective_prefs(&stored);
+    let custom_prompt = eff_prefs.custom_prompt.clone();
+    // 并发批次(§2.6.3):默认 3;Ollama 本地单卡恒 1
+    let concurrency = if prov_row.kind == "ollama" { 1 } else { eff_prefs.concurrency.clamp(1, 3) as usize };
     let system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
 
     let block_vec: Vec<Block> = all_blocks
@@ -200,16 +204,47 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
             .collect(),
     };
 
-    let mut prev = String::new(); // 跨批上下文:上批末 1~2 块已译文
-    for b in &batches {
-        if ctx.cancelled() {
-            break;
+    // 跨批上下文:上批末 1~2 块。首批单独先发(压首块时间),其译文作下一批上下文;
+    // 并发时后续批的译文还没出来,改用前一批末 1~2 块的原文作上下文。
+    let items_of = |b: &Vec<(usize, &Block)>| -> Vec<(usize, String)> { b.iter().map(|(gi, blk)| (*gi, blk.src.clone())).collect() };
+    let tail2 = |v: Vec<String>| -> String { v.into_iter().rev().take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n\n") };
+    let mut prev = String::new();
+    let mut rest = batches.iter();
+    if let Some(first) = rest.next() {
+        let texts = ctx.translate_batch(&items_of(first), &prev, 0).await?;
+        prev = tail2(texts.into_iter().map(|(_, t)| t).collect());
+    }
+    let rest: Vec<&Vec<(usize, &Block)>> = rest.collect();
+    if concurrency <= 1 {
+        for b in rest {
+            if ctx.cancelled() {
+                break;
+            }
+            let texts = ctx.translate_batch(&items_of(b), &prev, 0).await?;
+            if !texts.is_empty() {
+                prev = tail2(texts.into_iter().map(|(_, t)| t).collect());
+            }
         }
-        let items: Vec<(usize, String)> = b.iter().map(|(gi, blk)| (*gi, blk.src.clone())).collect();
-        let texts = ctx.translate_batch(&items, &prev, 0).await?;
-        if !texts.is_empty() {
-            let tail: Vec<String> = texts.iter().rev().take(2).map(|(_, t)| t.clone()).collect::<Vec<_>>().into_iter().rev().collect();
-            prev = tail.join("\n\n");
+    } else if !rest.is_empty() && !ctx.cancelled() {
+        use futures_util::stream::{self, StreamExt};
+        let jobs: Vec<(Vec<(usize, String)>, String)> = rest
+            .iter()
+            .enumerate()
+            .map(|(k, b)| {
+                let ctx_text = if k == 0 { prev.clone() } else { tail2(rest[k - 1].iter().map(|(_, blk)| blk.src.clone()).collect()) };
+                (items_of(b), ctx_text)
+            })
+            .collect();
+        let mut futs = Vec::with_capacity(jobs.len());
+        for (items, p) in &jobs {
+            futs.push(ctx.translate_batch(items, p, 0));
+        }
+        let mut running = stream::iter(futs).buffer_unordered(concurrency);
+        while let Some(r) = running.next().await {
+            r?;
+            if ctx.cancelled() {
+                break;
+            }
         }
     }
 
@@ -353,6 +388,7 @@ impl BatchCtx<'_> {
             first_block_ms,
             first_byte_ms: stats.first_byte_ms,
             reasoning_tokens: stats.reasoning_tokens,
+            cached_tokens: stats.cached_tokens,
             batch_blocks: items.len() as i64,
             batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
             model: self.provider_row.model.clone(),
@@ -362,6 +398,7 @@ impl BatchCtx<'_> {
             g.m.prompt_tokens += stats.prompt_tokens;
             g.m.completion_tokens += stats.completion_tokens;
             g.m.reasoning_tokens += stats.reasoning_tokens;
+            g.m.cached_tokens += stats.cached_tokens;
             g.m.requests += 1;
         }
         if stats.prompt_tokens > 0 || stats.completion_tokens > 0 {
@@ -369,6 +406,7 @@ impl BatchCtx<'_> {
                 prompt_tokens: stats.prompt_tokens,
                 completion_tokens: stats.completion_tokens,
                 reasoning_tokens: stats.reasoning_tokens,
+                cached_tokens: stats.cached_tokens,
             });
         }
     }

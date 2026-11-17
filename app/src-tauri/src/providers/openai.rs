@@ -75,10 +75,12 @@ impl super::Provider for OpenAiCompatible {
             for payload in sse.feed(&text) {
                 timing.observe(&payload, &mut stats);
                 match &payload {
-                    SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens } => {
+                    SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens } => {
                         stats.prompt_tokens = *prompt_tokens;
                         stats.completion_tokens = *completion_tokens;
                         stats.reasoning_tokens = *reasoning_tokens;
+                    stats.cached_tokens = *cached_tokens;
+                        stats.cached_tokens = *cached_tokens;
                     }
                     SsePayload::Finish(reason) => {
                         stats.finish_reason = Some(reason.clone());
@@ -94,10 +96,11 @@ impl super::Provider for OpenAiCompatible {
             let text = String::from_utf8_lossy(&utf8buf).into_owned();
             for payload in sse.feed(&text) {
                 timing.observe(&payload, &mut stats);
-                if let SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens } = &payload {
+                if let SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens } = &payload {
                     stats.prompt_tokens = *prompt_tokens;
                     stats.completion_tokens = *completion_tokens;
                     stats.reasoning_tokens = *reasoning_tokens;
+                    stats.cached_tokens = *cached_tokens;
                 }
                 let _ = tx.send(payload);
             }

@@ -21,6 +21,8 @@ pub struct StreamStats {
     pub completion_tokens: i64,
     /// 思考 token(`usage.completion_tokens_details.reasoning_tokens`;Ollama 无)
     pub reasoning_tokens: i64,
+    /// 输入中命中前缀缓存的 token(服务商不报 = 0)
+    pub cached_tokens: i64,
     pub finish_reason: Option<String>,
     /// 计时埋点(§2.6.8,均为相对请求发出的毫秒):响应头 / 首字节 / 首 reasoning / 首正文
     pub headers_ms: Option<i64>,

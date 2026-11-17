@@ -71,7 +71,14 @@ export function metricsLine(m: SessionMetrics): string {
 }
 
 /** 明细:分段时间条 + 指标表(ⓘ 弹层 / 主窗检查器共用) */
-export function MetricsDetail({ m, price, thinkTail }: { m: SessionMetrics; price?: number; thinkTail?: string }) {
+/** 成本估算:缓存命中的输入按缓存单价(未填则按普通单价) */
+export function estimateCost(prompt: number, completion: number, cached: number, price?: number, cachedPrice?: number | null): number {
+  if (!price) return 0;
+  const hit = Math.min(cached, prompt);
+  return ((prompt - hit) * price + hit * (cachedPrice ?? price) + completion * price) / 1_000_000;
+}
+
+export function MetricsDetail({ m, price, cachedPrice, thinkTail }: { m: SessionMetrics; price?: number; cachedPrice?: number | null; thinkTail?: string }) {
   const total = Math.max(m.total_ms, 1);
   const think0 = m.first_reasoning_ms;
   const conn = think0 ?? m.ttft_ms ?? total;
@@ -85,7 +92,7 @@ export function MetricsDetail({ m, price, thinkTail }: { m: SessionMetrics; pric
     ["收尾", rest, "var(--fill-2)"],
   ] as const;
   const s = speed(m);
-  const cost = price ? ((m.prompt_tokens + m.completion_tokens) / 1_000_000) * price : 0;
+  const cost = estimateCost(m.prompt_tokens, m.completion_tokens, m.cached_tokens ?? 0, price, cachedPrice);
   const heavyThink = m.reasoning_tokens > 0 && (m.reasoning_tokens / Math.max(1, m.completion_tokens) > 0.4 || think / total > 0.3);
   return (
     <div className="text-[12px]">
@@ -102,6 +109,7 @@ export function MetricsDetail({ m, price, thinkTail }: { m: SessionMetrics; pric
         <Kv k="首块" v={sec(m.first_block_ms)} />
         <Kv k="总耗时" v={sec(m.total_ms)} />
         <Kv k="输入" v={`${m.prompt_tokens.toLocaleString()} tok`} />
+        {(m.cached_tokens ?? 0) > 0 && <Kv k="其中缓存命中" v={`${m.cached_tokens.toLocaleString()} tok · ${Math.round((m.cached_tokens / Math.max(1, m.prompt_tokens)) * 100)}%`} />}
         <Kv k="输出" v={`${m.completion_tokens.toLocaleString()} tok`} />
         {m.reasoning_tokens > 0 && <Kv k="其中思考" v={`${m.reasoning_tokens.toLocaleString()} tok`} />}
         <Kv k="生成速度" v={s ? `${Math.round(s)} tok/s` : "—"} />

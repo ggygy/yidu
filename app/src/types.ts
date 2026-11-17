@@ -41,7 +41,7 @@ export type StreamEvent =
   | { type: "created"; article_id: number; article: Article; blocks: Block[] }
   | { type: "block"; idx: number; text: string; terms: string; format_warn: string }
   | { type: "partial"; idx: number; text: string }
-  | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number }
+  | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number; cached_tokens: number }
   | { type: "phase"; phase: Phase }
   | { type: "thinking"; chars: number; tail: string }
   | ({ type: "metrics" } & SessionMetrics)
@@ -60,6 +60,7 @@ export interface SessionMetrics {
   prompt_tokens: number;
   completion_tokens: number;
   reasoning_tokens: number;
+  cached_tokens: number;
   requests: number;
   batches: number;
   blocks: number;
@@ -111,6 +112,8 @@ export interface Prefs {
   quick_scale: number; // 0.8–1.5,⌘± / ⌘0(快捷窗)
   main_scale: number;  // 0.8–1.5(主窗)
   density: "compact" | "standard" | "loose";
+  concurrency: number; // 并发批次 1–3(Ollama 恒 1)
+  cached_price_per_mtok: number | null; // 缓存命中输入单价;null = 按普通单价
 }
 
 export interface DictSense {
@@ -179,6 +182,7 @@ export interface UsageRow {
   prompt_tokens: number;
   completion_tokens: number;
   reasoning_tokens: number;
+  cached_tokens: number;
 }
 
 export interface UsageReport {
@@ -186,6 +190,7 @@ export interface UsageReport {
   month_prompt: number;
   month_completion: number;
   month_reasoning: number;
+  month_cached: number;
   models: { model: string; samples: number; ttft_median_ms: number | null; total_median_ms: number }[];
   recent: UsageRow[];
 }
