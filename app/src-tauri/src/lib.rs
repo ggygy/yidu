@@ -5,6 +5,7 @@ mod commands;
 mod db;
 mod dict;
 mod keychain;
+mod native;
 mod prompt;
 mod providers;
 mod sse;
@@ -21,18 +22,27 @@ use tauri::Manager;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_window_state::{Builder as WindowStateBuilder, StateFlags};
 
-/// 快捷窗唤出/隐藏(权威状态在 Rust 侧 isVisible)
+/// ⌥T 唤出语义(§2.4.1):已在前台且有焦点 → 隐藏;否则移到当前桌面、取消最小化、激活应用、置前并聚焦
+/// (v0.2 只看 is_visible:被遮挡 / 在别的桌面 / 最小化时反而把它藏起来)
 pub fn toggle_quick(app: &tauri::AppHandle) {
-    if let Some(q) = app.get_webview_window("quick") {
-        if q.is_visible().unwrap_or(false) {
-            let _ = q.hide();
-        } else {
-            let _ = q.show();
-            let _ = q.set_focus();
-            // 通知快捷窗:被唤出了(用于剪贴板预填「假划词」)
-            let _ = app.emit_to("quick", "quick-shown", ());
-        }
+    let Some(q) = app.get_webview_window("quick") else { return };
+    let visible = q.is_visible().unwrap_or(false);
+    let focused = q.is_focused().unwrap_or(false);
+    let minimized = q.is_minimized().unwrap_or(false);
+    if visible && focused && !minimized {
+        native::remember_quick_pos(app);
+        let _ = q.hide();
+        return;
     }
+    if !visible {
+        native::place_quick(app);
+    }
+    native::update_dock(app);
+    let _ = q.unminimize();
+    let _ = q.show();
+    let _ = q.set_focus();
+    // 通知快捷窗:被唤出了(剪贴板预填「假划词」、聚焦输入框、300ms 内不触发失焦隐藏)
+    let _ = app.emit_to("quick", "quick-shown", ());
 }
 
 /// 热键注册状态(v0.3 §1:注册失败必须可见,不再只 eprintln)
@@ -102,15 +112,17 @@ pub fn set_hotkey_status(app: &tauri::AppHandle, accel: &str, error: Option<Stri
     let _ = app.emit("hotkey-status", status);
 }
 
-/// 打开主窗并跳到设置
+/// 打开主窗;settings = 改为打开独立设置窗口的「快捷窗」分区(热键改键入口)
 pub fn show_main(app: &tauri::AppHandle, settings: bool) {
+    if settings {
+        native::show_settings(app, Some("quick"));
+        return;
+    }
     if let Some(m) = app.get_webview_window("main") {
+        native::make_regular(app);
         let _ = m.show();
         let _ = m.unminimize();
         let _ = m.set_focus();
-        if settings {
-            let _ = app.emit_to("main", "open-settings", ());
-        }
     }
 }
 
@@ -147,15 +159,23 @@ pub fn reregister_hotkey(app: &tauri::AppHandle, old: &str, new: &str) -> Result
     }
 }
 
-/// 关闭即隐藏(v0.3 §1):红灯 / ⌘W 不再销毁 webview,⌥T / 托盘始终可唤回
+/// 关闭即隐藏(v0.3 §1):红灯 / ⌘W 不再销毁 webview,⌥T / 托盘始终可唤回;
+/// 获焦时重读系统强调色(§2.7:改强调色须去系统设置,回来必获焦)
 fn hide_on_close(app: &tauri::AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
         let w2 = w.clone();
-        w.on_window_event(move |e| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+        let app2 = app.clone();
+        w.on_window_event(move |e| match e {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+                if w2.label() == "quick" {
+                    native::remember_quick_pos(&app2);
+                }
                 let _ = w2.hide();
+                native::update_dock(&app2);
             }
+            tauri::WindowEvent::Focused(true) => native::refresh_accent(&app2),
+            _ => {}
         });
     }
 }
@@ -166,6 +186,7 @@ pub fn run() {
         .plugin(
             WindowStateBuilder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE) // 重启不自动显示快捷窗
+                .with_denylist(&["settings"]) // 设置窗固定尺寸、每次居中
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -184,6 +205,9 @@ pub fn run() {
             // 不写 Keychain —— 避免 SecItemUpdate 触发系统授权弹框把 setup 卡死。
 
             app.manage(HotkeyState::default());
+            native::load_quick_pos(app.handle());
+            native::setup_quick_window(app.handle());
+            app.manage(native::AccentState(std::sync::Mutex::new(native::current_accent())));
 
             // 关闭即隐藏:主窗与快捷窗
             hide_on_close(app.handle(), "main");
@@ -191,7 +215,13 @@ pub fn run() {
 
             // tray:唤出主窗/快捷窗、退出(热键失败时首项为「改键」入口)
             let stored = commands::load_prefs(&db)?;
-            let accel = commands::effective_prefs(&stored).hotkey;
+            let eff = commands::effective_prefs(&stored);
+            let accel = eff.hotkey.clone();
+
+            // 外观三态(Rust 权威)+ 应用菜单(macOS:自定义菜单须自带编辑菜单)
+            #[cfg(target_os = "macos")]
+            native::install_menu(app.handle(), &eff.theme_mode)?;
+            native::apply_theme_mode(app.handle(), &eff.theme_mode);
             let menu = build_tray_menu(app.handle(), &HotkeyStatus { accel: accel.clone(), error: None })?;
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().expect("缺少应用图标").clone())
@@ -223,6 +253,10 @@ pub fn run() {
             commands::provider_set_key,
             commands::provider_set_active,
             commands::provider_test,
+            commands::provider_test_form,
+            commands::provider_models,
+            commands::provider_key_hint,
+            commands::thinking_preview,
             commands::lookup_word,
             commands::vocab_add,
             commands::vocab_list,
@@ -235,7 +269,10 @@ pub fn run() {
             commands::get_prefs,
             commands::set_prefs,
             commands::usage_summary,
+            commands::usage_report,
             commands::hotkey_status,
+            commands::get_accent,
+            commands::open_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

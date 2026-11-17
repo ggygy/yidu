@@ -1,17 +1,10 @@
 /* ============ Tailwind 4 入口 ============ */
 @import "tailwindcss";
 
-/* 深色变体:跟随 data-theme 属性(跨窗广播切换,不依赖 class) */
+/* 深色变体:data-theme 只镜像窗口真实外观(prefers-color-scheme,由 Rust set_theme 驱动,见 native.ts) */
 @custom-variant dark ([data-theme="dark"] &);
 
-/* ============ 本地字体(离线可用;latin 子集 ~100KB,中文走系统字体栈) ============ */
-@font-face {
-  font-family: "Inter";
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url("./assets/fonts/inter-latin.woff2") format("woff2");
-}
+/* ============ 字体:界面与译文全部系统字体(v0.3 §2.7.2);仅等宽回落打包 JetBrains Mono ============ */
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
@@ -20,141 +13,251 @@
   src: url("./assets/fonts/jetbrainsmono-latin.woff2") format("woff2");
 }
 
-/* ============ 运行时令牌(亮/暗 + 阅读外观即时注入,变量名不变) ============ */
+/* ============ 设计 token(research/12-visual-language.md,对齐 macOS label 体系) ============
+   面只有两种:系统材质(native 时透明透出 NSVisualEffectView;否则 --mat 回退)+ 文档实底 --bgdoc */
 :root {
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --surface-2: #f2f4f7;
-  --border: #e6e8ee;
-  --t1: #101322;
-  --t2: #5a6172;
-  --t3: #a0a5b4;
-  --accent: #4c5bf0;
-  --accent-soft: #eef0ff;
-  --code-bg: #14161d;
-  --code-tx: #c9ceda;
-  --code-dim: #6b7280;
-  --ok: #22a55b;
-  --scrim: rgba(16, 19, 34, 0.35);
-  --shadow-card: 0 12px 32px rgba(16, 19, 34, 0.14);
-  --shadow-capsule: 0 8px 24px rgba(16, 19, 34, 0.12);
-  --f-ui: "Inter", -apple-system, "Noto Sans SC", "PingFang SC", sans-serif;
-  /* v0.3:删除打包的 Source Serif 4(仅 600 字重,正文成「标题体」);标题与译文改系统无衬线 */
-  --f-title: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
-  --f-mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  color-scheme: light;
+  --t1: #1d1d1f;          /* label            正文 ≥ 7:1 */
+  --t2: #4c4c52;          /* secondaryLabel   ≥ 4.5:1 */
+  --t3: #6e6e73;          /* tertiaryLabel    ≥ 4.5:1 */
+  --border: rgba(0, 0, 0, 0.1);
+  --bgdoc: #ffffff;       /* 文档区实底 */
+  --bgwin: #ececee;       /* 无材质时的窗口底(Windows / 降低透明度) */
+  --mat: rgba(246, 246, 248, 0.78);
+  --group: #ffffff;       /* 设置分组卡 */
+  --groupbg: #f2f2f7;     /* 设置右栏底 */
+  --ctl: rgba(255, 255, 255, 0.72); /* 弹出按钮 / 次要按钮 / 分段选中块 */
+  --fill: rgba(120, 120, 128, 0.12); /* 浅填充:代码块、输入底、hover */
+  --fill-2: rgba(120, 120, 128, 0.2);
+  --accent-fallback: #0a7aff;
+  --accent: var(--accent-sys, var(--accent-fallback)); /* --accent-sys 由 Rust 读 NSColor.controlAccentColor 注入 */
+  --on-accent: #ffffff;
+  --ok: #28a745;
+  --danger: #d70015;
+  --surface: #ffffff;     /* 弹层(菜单 / 卡片) */
+  --scrim: rgba(0, 0, 0, 0.18);
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  --shadow-ctl: 0 0.5px 1.5px rgba(0, 0, 0, 0.25);
+  --f-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+  --f-mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 [data-theme="dark"] {
-  --bg: #09090b;
-  --surface: #18181b;
-  --surface-2: #232327;
-  --border: #2a2a30;
-  --t1: #f4f4f5;
-  --t2: #a6a6b0;
-  --t3: #6e6e78;
-  --accent: #8b96ff;
-  --accent-soft: #23244b;
-  --code-bg: #101014;
-  --code-tx: #d4d4dc;
-  --code-dim: #8a8a94;
-  --ok: #4ade80;
-  --scrim: rgba(0, 0, 0, 0.5);
-  --shadow-card: 0 12px 32px rgba(0, 0, 0, 0.5);
-  --shadow-capsule: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+  --t1: #f5f5f7;
+  --t2: #c7c7cc;
+  --t3: #98989f;
+  --border: rgba(255, 255, 255, 0.1);
+  --bgdoc: #1e1e1e;
+  --bgwin: #2a2a2d;
+  --mat: rgba(40, 40, 44, 0.72);
+  --group: #2c2c2e;
+  --groupbg: #1e1e1e;
+  --ctl: rgba(120, 120, 128, 0.32);
+  --fill: rgba(120, 120, 128, 0.2);
+  --fill-2: rgba(120, 120, 128, 0.32);
+  --accent-fallback: #0a84ff;
+  --ok: #32d74b;
+  --danger: #ff453a;
+  --surface: #2c2c2e;
+  --scrim: rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  --shadow-ctl: 0 0.5px 1.5px rgba(0, 0, 0, 0.5), inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
 }
 
-/* Tailwind 令牌映射:inline = 工具类直接引用运行时变量,暗色/阅读外观切换即时生效 */
+/* Tailwind 令牌映射(类名沿用 v0.2:bg / surface2 / line / accentsoft … 语义改指新 token) */
 @theme inline {
-  --color-bg: var(--bg);
+  --color-bg: var(--bgdoc);
+  --color-doc: var(--bgdoc);
   --color-surface: var(--surface);
-  --color-surface2: var(--surface-2);
+  --color-surface2: var(--fill);
+  --color-fill2: var(--fill-2);
+  --color-ctl: var(--ctl);
+  --color-group: var(--group);
+  --color-groupbg: var(--groupbg);
   --color-line: var(--border);
   --color-t1: var(--t1);
   --color-t2: var(--t2);
   --color-t3: var(--t3);
   --color-accent: var(--accent);
-  --color-accentsoft: var(--accent-soft);
-  --color-codebg: var(--code-bg);
-  --color-codetx: var(--code-tx);
-  --color-codedim: var(--code-dim);
+  --color-onaccent: var(--on-accent);
+  --color-accentsoft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --color-codebg: var(--fill);
+  --color-codetx: var(--t1);
+  --color-codedim: var(--t3);
   --color-ok: var(--ok);
+  --color-danger: var(--danger);
   --color-scrim: var(--scrim);
   --font-ui: var(--f-ui);
-  --font-title: var(--f-title);
+  --font-title: var(--f-ui);
   --font-code: var(--f-mono);
 }
 
 @layer base {
   html, body, #root { height: 100%; }
-  body { font-family: var(--f-ui); color: var(--t1); background: var(--bg); }
+  body {
+    font-family: var(--f-ui);
+    font-size: 13px;
+    color: var(--t1);
+    background: var(--bgwin);
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+  /* macOS + Tauri:窗口透明,未涂底的地方透出系统材质 */
+  html[data-native] body { background: transparent; }
+  /* 文档 / 输入区允许选择复制 */
+  .doc, .doc *, textarea, input, .selectable, .selectable * { -webkit-user-select: text; user-select: text; }
+  input, textarea, select, button { font: inherit; }
+  input, textarea, select { accent-color: var(--accent); }
+  button { cursor: default; }
   kbd {
     font-family: var(--f-ui);
     font-size: 11px;
-    color: var(--t2);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1px 6px;
-    line-height: 1.5;
+    color: var(--t3);
   }
+  ::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  code, pre, .font-code { font-variant-ligatures: none; } /* -> :: 不连写 */
+  /* 键盘焦点才显示光圈;鼠标点击不留框 */
+  :focus { outline: none; }
+  button:focus-visible, select:focus-visible, [role="switch"]:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+  /* 细滚动条(接近系统叠加式) */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--t3) 35%, transparent); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--t3) 60%, transparent); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+}
+
+/* 系统「降低透明度」:材质由系统变不透明,CSS 侧给回窗底保险 */
+@media (prefers-reduced-transparency: reduce) {
+  html[data-native] body { background: var(--bgwin); }
 }
 
 /* ============ 动画 ============ */
 @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slidein-l { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes slidein-r { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-/* ============ 译文排版 + markdown 排版 + 内容交互(渲染型内容,@layer components 让 utilities 可覆盖) ============ */
 @layer components {
-  .zh {
-    font-size: var(--zh-size, 16px);
-    line-height: var(--zh-line, 1.8);
-    font-family: var(--zh-font, var(--f-title));
-    font-weight: 500;
-    color: var(--reader-t1, var(--t1));
-  }
-  .zh.streaming { opacity: 0.55; }
+  /* ---- 材质面(非 native 时回退半透明 + 模糊) ---- */
+  .mat { background: var(--mat); -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6); }
+  html[data-native] .mat { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
 
-  /* markdown 排版系统(渲染型内容,两窗共用;紧凑间距) */
-  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
-    font-family: var(--f-ui); font-weight: 650; line-height: 1.3;
-    margin: 0.6em 0 0.2em; letter-spacing: 0.2px;
+  /* ---- 统一工具栏:高 52(快捷窗 44),内容与红绿灯中线对齐;左让位 ≥ 92 / 88(M0 实测) ---- */
+  .tb { height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 0.5px solid var(--border); flex: none; }
+  .tb.tb-quick { height: 44px; padding: 0 10px; }
+  html[data-mac]:not([data-fullscreen]) .tb { padding-left: 92px; }
+  html[data-mac]:not([data-fullscreen]) .tb.tb-quick { padding-left: 88px; }
+  html[data-mac]:not([data-fullscreen]) .tb.tb-side { padding-left: 12px; } /* 侧栏展开时让位由侧栏承担 */
+  html[data-inactive] .tb > *:not(.tb-keep) { opacity: 0.55; }
+
+  /* ---- 分段控件 ---- */
+  .seg { display: inline-flex; flex: none; background: var(--fill-2); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg > button { height: 22px; padding: 0 10px; border-radius: 5px; border: none; background: none; color: var(--t2); font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .seg > button[aria-pressed="true"] { background: var(--ctl); color: var(--t1); box-shadow: var(--shadow-ctl); }
+  [data-theme="dark"] .seg > button[aria-pressed="true"] { background: rgba(120, 120, 128, 0.5); }
+
+  /* ---- 工具栏图标按钮 ---- */
+  .tbtn, .btn, .pbtn, .seg > button { transition: background-color 0.12s, color 0.12s, box-shadow 0.12s; }
+  .tbtn { width: 28px; height: 24px; border-radius: 6px; border: none; background: none; color: var(--t2); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .tbtn:hover { background: var(--fill); color: var(--t1); }
+  .tbtn[aria-pressed="true"] { color: var(--accent); }
+  .tbtn:disabled { opacity: 0.4; background: none; }
+
+  /* ---- 弹出按钮 / 次要按钮 / 主按钮 ---- */
+  .pbtn { height: 22px; padding: 0 8px; border-radius: 6px; border: none; background: var(--ctl); box-shadow: var(--shadow-ctl); color: var(--t1); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex: none; }
+  .pbtn:active { filter: brightness(0.94); }
+  .pbtn:disabled { color: var(--t3); background: var(--fill); box-shadow: none; }
+  .btn { height: 24px; padding: 0 12px; border-radius: 6px; border: none; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex: none; background: var(--ctl); box-shadow: var(--shadow-ctl); color: var(--t1); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+  .btn:active { filter: brightness(0.92); }
+  .btn:disabled { background: var(--fill); color: var(--t3); box-shadow: none; filter: none; } /* 禁用态灰底,不用半透明 accent(§2.7.3) */
+  .btn.danger { color: var(--danger); }
+
+  /* ---- 输入框(系统风格:实底 + 细边,聚焦强调色光圈) ---- */
+  .field { height: 24px; border-radius: 6px; border: 0.5px solid var(--border); background: var(--bgdoc); color: var(--t1); padding: 0 8px; font-size: 13px; outline: none; min-width: 0; }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .field.mono { font-family: var(--f-mono); font-size: 12px; }
+  .gr .field { background: var(--fill); border-color: transparent; }
+  .gr .field:focus { background: var(--bgdoc); border-color: var(--accent); }
+
+  /* ---- 弹层菜单 ---- */
+  .menu { background: var(--surface); border-radius: 8px; box-shadow: var(--shadow-card); padding: 5px; min-width: 180px; }
+  .menu button:not(.btn):not(.tbtn) { width: 100%; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border: none; background: none; border-radius: 5px; color: var(--t1); font-size: 13px; text-align: left; white-space: nowrap; }
+  .menu button:not(.btn):not(.tbtn):hover { background: var(--accent); color: var(--on-accent); }
+  .menu button:not(.btn):not(.tbtn):hover * { color: inherit !important; }
+  .menu > hr { border: none; border-top: 0.5px solid var(--border); margin: 4px 6px; }
+
+  /* ---- 系统设置式分组列表 ---- */
+  .gl { background: var(--group); border-radius: 10px; border: 0.5px solid var(--border); }
+  .gr { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 12px; border-top: 0.5px solid var(--border); font-size: 13px; }
+  .gr:first-child { border-top: none; }
+  .gr > .v { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--t3); white-space: nowrap; }
+  .gh { font-size: 11px; font-weight: 600; color: var(--t3); padding: 0 12px 6px; }
+  .gf { font-size: 11px; color: var(--t3); padding: 6px 12px 0; line-height: 1.5; }
+
+  /* ---- 侧栏式列表行:圆角选中,无分隔线 ---- */
+  .srow { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: none; border-radius: 7px; background: transparent; text-align: left; color: var(--t1); }
+  .srow:hover { background: var(--fill); }
+  .srow[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+  .srow[aria-selected="true"] .sub { color: color-mix(in srgb, var(--on-accent) 75%, transparent); }
+  .srow .sub { color: var(--t3); }
+  html[data-inactive] .srow[aria-selected="true"] { background: var(--fill-2); color: var(--t1); }
+
+  /* ---- 浮动提示 ---- */
+  .toast { background: color-mix(in srgb, var(--t1) 88%, transparent); color: var(--bgdoc); font-size: 12px; padding: 6px 14px; border-radius: 999px; box-shadow: var(--shadow-card); white-space: nowrap; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); animation: fadein 0.15s; }
+
+  /* ---- 流式光标 ---- */
+  .caret { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: -2px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+
+  /* ============ 译文排版 + markdown 排版 + 内容交互(@layer components 让 utilities 可覆盖) ============ */
+  .zh {
+    font-size: var(--zh-size, 17px);
+    line-height: var(--zh-line, 1.85);
+    font-weight: 500;
+    color: var(--t1);
   }
-  .md h1 { font-size: 20px; }
-  .md h2 { font-size: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
-  .md h3 { font-size: 15px; }
-  .md h4 { font-size: 13.5px; }
-  .md h5 { font-size: 13px; }
-  .md h6 { font-size: 12.5px; color: var(--t2); }
+  .zh.streaming > :last-child::after { content: ""; display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(1) infinite; }
+
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-weight: 700; line-height: 1.3; margin: 0.6em 0 0.25em; }
+  .md h1 { font-size: 1.3em; }
+  .md h2 { font-size: 1.18em; }
+  .md h3 { font-size: 1.06em; }
+  .md h4, .md h5, .md h6 { font-size: 1em; }
+  .md h6 { color: var(--t2); }
   .md > :first-child { margin-top: 0; }
   .md > :last-child { margin-bottom: 0; }
   .md p { margin: 0 0 6px; }
-  .md strong, .md b { color: var(--t1); font-weight: 600; }
+  .md strong, .md b { color: var(--t1); font-weight: 650; }
   .md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
   .md ul, .md ol { padding-left: 1.5em; }
+  .md ul { list-style: disc; }
+  .md ol { list-style: decimal; }
   .md li { margin: 1.5px 0; }
-  .md li::marker { color: var(--accent); }
-  .md blockquote { margin: 6px 0; padding: 6px 12px; border-left: 3px solid var(--accent-soft); background: var(--surface-2); border-radius: 0 10px 10px 0; color: var(--t2); }
+  .md blockquote { margin: 6px 0; padding: 2px 12px; border-left: 3px solid var(--fill-2); color: var(--t2); }
   .md blockquote p { margin: 0 0 4px; }
   .md blockquote p:last-child { margin-bottom: 0; }
-  .md code { font-family: var(--f-mono); font-size: 0.88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
-  .md pre { font-family: var(--f-mono); }
+  .md code { font-family: var(--f-mono); font-size: 0.86em; background: var(--fill); padding: 1px 4px; border-radius: 4px; }
+  .md pre { font-family: var(--f-mono); background: var(--fill); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
   .md pre code { background: none; padding: 0; font-size: inherit; }
-  .md table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 8px 0; font-size: 0.92em; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .md th, .md td { border-bottom: 1px solid var(--border); padding: 5px 9px; text-align: left; }
-  .md th:not(:last-child), .md td:not(:last-child) { border-right: 1px solid var(--border); }
-  .md th { background: var(--surface-2); font-weight: 600; }
+  .md table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 8px 0; font-size: 0.92em; border: 0.5px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .md th, .md td { border-bottom: 0.5px solid var(--border); padding: 5px 9px; text-align: left; }
+  .md th:not(:last-child), .md td:not(:last-child) { border-right: 0.5px solid var(--border); }
+  .md th { background: var(--fill); font-weight: 600; }
   .md tr:last-child td { border-bottom: none; }
-  .md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-  .md img { max-width: 100%; border-radius: 10px; }
+  .md hr { border: none; border-top: 0.5px solid var(--border); margin: 12px 0; }
+  .md img { max-width: 100%; border-radius: 8px; }
 
-  /* 原文点词(v4:常显极淡虚线,提升可发现性;hover 增强) */
-  .en { color: var(--t3); }
-  .en .w { cursor: pointer; border-bottom: 1px dotted color-mix(in srgb, var(--t3) 45%, transparent); transition: color 0.12s, border-color 0.12s; }
-  .en .w:hover { border-bottom-color: var(--accent); color: var(--t1); }
+  /* 原文:次要色(对比度 ≥ 4.5:1,修审计 2.32:1)+ 点词 */
+  .en { color: var(--t2); font-weight: 400; }
+  /* 点词:平时不画下划线(满屏虚线太吵),悬停到词上才提示可点 */
+  .en .w { cursor: pointer; border-radius: 3px; transition: color 0.12s, background-color 0.12s; }
+  .en .w:hover { color: var(--t1); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 
-  /* 术语译后高亮(正文内标记,点击弹卡) */
-  .tm { cursor: pointer; border-bottom: 1px solid var(--accent); background: linear-gradient(transparent 60%, var(--accent-soft) 60%); border-radius: 2px; }
+  /* 术语译后高亮 */
+  .tm { cursor: pointer; border-bottom: 1px solid var(--accent); background: linear-gradient(transparent 62%, color-mix(in srgb, var(--accent) 16%, transparent) 62%); border-radius: 2px; }
   .tm:hover { color: var(--accent); }
 }
 

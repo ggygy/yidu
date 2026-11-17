@@ -140,6 +140,14 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         )?;
         conn.pragma_update(None, "user_version", 3)?;
     }
+    if version < 4 {
+        // v4(v0.3 §2.6.7 用量页):记录每次请求的模型名(各模型首字中位数);旧行按 provider 当前模型回填
+        conn.execute_batch(
+            "ALTER TABLE usage_log ADD COLUMN model TEXT NOT NULL DEFAULT '';
+             UPDATE usage_log SET model = COALESCE((SELECT model FROM providers WHERE providers.id = usage_log.provider_id), '');",
+        )?;
+        conn.pragma_update(None, "user_version", 4)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -217,6 +225,20 @@ pub struct UsageRecord {
     pub reasoning_tokens: i64,
     pub batch_blocks: i64,
     pub batch_chars: i64,
+    pub model: String,
+}
+
+/// 用量页一行(最近请求)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsageRow {
+    pub created_at: i64,
+    pub model: String,
+    pub provider: String,
+    pub ttft_ms: Option<i64>,
+    pub latency_ms: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub reasoning_tokens: i64,
 }
 
 // ---------- 文章 ----------
@@ -637,8 +659,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO usage_log(provider_id, article_id, kind, prompt_tokens, completion_tokens, latency_ms,
-                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 u.provider_id,
                 u.article_id,
@@ -652,7 +674,8 @@ impl Db {
                 u.reasoning_tokens,
                 u.batch_blocks,
                 u.batch_chars,
-                now()
+                now(),
+                u.model
             ],
         )?;
         Ok(())
@@ -681,6 +704,40 @@ impl Db {
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?)
+    }
+
+    /// 自 since(unix 秒)以来的翻译请求合计:(请求, 输入, 输出, 思考)
+    pub fn usage_since(&self, since: i64) -> Result<(i64, i64, i64, i64)> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(reasoning_tokens),0)
+             FROM usage_log WHERE kind='translate' AND created_at >= ?1",
+            params![since],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?)
+    }
+
+    /// 最近 n 次翻译请求(新→旧)
+    pub fn usage_recent(&self, n: i64) -> Result<Vec<UsageRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT u.created_at, u.model, COALESCE(p.name, ''), u.ttft_ms, u.latency_ms, u.prompt_tokens, u.completion_tokens, u.reasoning_tokens
+             FROM usage_log u LEFT JOIN providers p ON p.id = u.provider_id
+             WHERE u.kind='translate' ORDER BY u.id DESC LIMIT ?1",
+        )?;
+        let rows = st.query_map(params![n], |r| {
+            Ok(UsageRow {
+                created_at: r.get(0)?,
+                model: r.get(1)?,
+                provider: r.get(2)?,
+                ttft_ms: r.get(3)?,
+                latency_ms: r.get(4)?,
+                prompt_tokens: r.get(5)?,
+                completion_tokens: r.get(6)?,
+                reasoning_tokens: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     // ---------- 杂项状态 ----------
@@ -715,6 +772,19 @@ mod tests {
     }
 
     #[test]
+    fn usage_model_and_report() {
+        let (db, _dir) = temp_db("report");
+        db.insert_usage(&UsageRecord { kind: "translate".into(), model: "m1".into(), ttft_ms: Some(700), latency_ms: 900, completion_tokens: 10, reasoning_tokens: 4, ..Default::default() }).unwrap();
+        db.insert_usage(&UsageRecord { kind: "translate".into(), model: "m2".into(), ttft_ms: None, latency_ms: 300, ..Default::default() }).unwrap();
+        let recent = db.usage_recent(20).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].model, "m2");
+        assert_eq!(recent[1].ttft_ms, Some(700));
+        let (n, _, c, r) = db.usage_since(0).unwrap();
+        assert_eq!((n, c, r), (2, 10, 4));
+    }
+
+    #[test]
     fn migration_v3_usage_columns_roundtrip() {
         let (db, dir) = temp_db("usage");
         db.insert_usage(&UsageRecord {
@@ -730,12 +800,13 @@ mod tests {
             reasoning_tokens: 5,
             batch_blocks: 1,
             batch_chars: 42,
+            model: "m".into(),
         })
         .unwrap();
         {
             let conn = db.conn.lock().unwrap();
             let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 3);
+            assert_eq!(v, 4);
             let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
                 .query_row(
                     "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",

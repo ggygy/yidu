@@ -24,7 +24,7 @@
         "label": "quick",
         "title": "快捷翻译",
         "url": "quick.html",
-        "width": 420,
+        "width": 440,
         "height": 660,
         "visible": false,
         "skipTaskbar": true,

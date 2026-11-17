@@ -4,7 +4,7 @@ import { Icon } from "./icons";
 import { LANGS, encodeCustomName, langZh, makeDir, splitDir } from "./languages";
 
 const SELECT_CLS =
-  "h-7 max-w-[110px] text-xs bg-transparent border border-line rounded-[7px] px-1.5 cursor-pointer outline-none focus:border-accent text-t1";
+  "field !h-[22px] !text-[12px] !px-1 max-w-[110px]";
 
 function SegSelect({ seg, onSeg }: { seg: string; onSeg: (s: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -23,7 +23,7 @@ function SegSelect({ seg, onSeg }: { seg: string; onSeg: (s: string) => void }) 
         ref={ref}
         value={draft}
         placeholder="语言名,如 泰语"
-        className="h-7 w-[92px] text-xs bg-surface border border-accent rounded-[7px] px-1.5 outline-none text-t1"
+        className="field !h-[22px] !text-[12px] w-[92px]"
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -56,12 +56,12 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (d: st
   if (value === "auto") {
     return (
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 h-7 px-2 rounded-[7px] bg-accentsoft text-accent text-xs font-medium">
+        <span className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md bg-accentsoft text-accent text-[12px] font-medium whitespace-nowrap">
           <Icon n="zap" size={12} /> 自动识别
         </span>
         <button
           title="放弃自动,手动指定方向"
-          className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-0.5 hover:text-accent"
+          className="border-none bg-transparent text-[12px] text-accent px-0.5 whitespace-nowrap"
           onClick={() => onChange("en2zh")}
         >
           改手动
@@ -73,7 +73,7 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (d: st
     <span className="inline-flex items-center gap-1.5">
       <button
         title="自动识别语言:中文→英,其余→中"
-        className="flex items-center border-none bg-none text-t3 cursor-pointer p-0.5 hover:text-accent"
+        className="tbtn !w-6 !h-6"
         onClick={() => onChange("auto")}
       >
         <Icon n="zap" size={13} />
@@ -81,7 +81,7 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (d: st
       <SegSelect seg={a} onSeg={(s) => onChange(makeDir(s, b))} />
       <button
         title="交换方向"
-        className="flex items-center border-none bg-none text-t2 cursor-pointer p-0.5 hover:text-accent"
+        className="tbtn !w-6 !h-6"
         onClick={() => onChange(makeDir(b, a))}
       >
         <Icon n="swap" size={13} />

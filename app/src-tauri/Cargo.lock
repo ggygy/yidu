@@ -5794,6 +5794,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "keyring",
+ "objc2-app-kit",
  "pulldown-cmark",
  "regex",
  "reqwest 0.12.28",

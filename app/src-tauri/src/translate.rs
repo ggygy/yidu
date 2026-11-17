@@ -25,8 +25,45 @@ pub enum StreamEvent {
     Block { idx: usize, text: String, terms: String },
     Partial { idx: usize, text: String },
     Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
+    /// 阶段(§2.6.5):conn 连接 / think 思考 / gen 生成
+    Phase { phase: String },
+    /// 思考进度(思考关不掉时;≥100ms 节流):累计字数 + 末尾约 200 字。思考文本绝不进译文
+    Thinking { chars: usize, tail: String },
+    /// 会话结束明细(§2.6.6;口径见 §2.6.8,均相对会话开始)
+    Metrics(SessionMetrics),
     Done { article_id: i64 },
     Error { message: String },
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct SessionMetrics {
+    /// 首个正文 token(TTFT)
+    pub ttft_ms: Option<i64>,
+    /// 首个完整块
+    pub first_block_ms: Option<i64>,
+    /// 首个思考 token(有思考时)
+    pub first_reasoning_ms: Option<i64>,
+    /// 最后一个正文 token
+    pub last_content_ms: Option<i64>,
+    pub total_ms: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub requests: i64,
+    pub batches: i64,
+    pub blocks: i64,
+    pub model: String,
+    pub cancelled: bool,
+}
+
+/// 会话内计量(BatchCtx 经 &self 共享)
+struct SessionMeter {
+    t0: Instant,
+    m: SessionMetrics,
+    phase: &'static str,
+    think_chars: usize,
+    think_tail: String,
+    last_think_emit: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -130,8 +167,23 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
         })
         .collect();
     let batches = batch::make_batches(&block_vec, &pending, &req.direction);
+    let meter = std::sync::Mutex::new(SessionMeter {
+        t0: Instant::now(),
+        m: SessionMetrics {
+            model: prov_row.model.clone(),
+            batches: batches.len() as i64,
+            blocks: pending.len() as i64,
+            ..Default::default()
+        },
+        phase: "conn",
+        think_chars: 0,
+        think_tail: String::new(),
+        last_think_emit: None,
+    });
+    let _ = channel.send(StreamEvent::Phase { phase: "conn".into() });
 
     let ctx = BatchCtx {
+        meter: &meter,
         provider_row: prov_row,
         db: &db,
         article_id,
@@ -164,11 +216,18 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
 
     db.touch_article(article_id)?;
     let _ = app.emit("library-changed", ());
+    {
+        let mut g = meter.lock().unwrap();
+        g.m.total_ms = g.t0.elapsed().as_millis() as i64;
+        g.m.cancelled = ctx.cancelled();
+        let _ = channel.send(StreamEvent::Metrics(g.m.clone()));
+    }
     let _ = channel.send(StreamEvent::Done { article_id });
     Ok(())
 }
 
 struct BatchCtx<'a> {
+    meter: &'a std::sync::Mutex<SessionMeter>,
     provider_row: ProviderRow,
     db: &'a Db,
     article_id: i64,
@@ -284,7 +343,15 @@ impl BatchCtx<'_> {
             reasoning_tokens: stats.reasoning_tokens,
             batch_blocks: items.len() as i64,
             batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
+            model: self.provider_row.model.clone(),
         });
+        {
+            let mut g = self.meter.lock().unwrap();
+            g.m.prompt_tokens += stats.prompt_tokens;
+            g.m.completion_tokens += stats.completion_tokens;
+            g.m.reasoning_tokens += stats.reasoning_tokens;
+            g.m.requests += 1;
+        }
         if stats.prompt_tokens > 0 || stats.completion_tokens > 0 {
             let _ = self.channel.send(StreamEvent::Usage {
                 prompt_tokens: stats.prompt_tokens,
@@ -475,13 +542,62 @@ fn process_payload(
     t0: &Instant,
     first_block_ms: &mut Option<i64>,
 ) {
-    // Reasoning 不进状态机与 raw(思考文本绝不进译文);M1 只在 provider 层计时
-    let SsePayload::Delta(d) = p else { return };
+    // Reasoning 不进状态机与 raw(思考文本绝不进译文):只计时 + 节流推思考进度
+    let d = match p {
+        SsePayload::Reasoning(r) => {
+            let mut g = ctx.meter.lock().unwrap();
+            let now_ms = g.t0.elapsed().as_millis() as i64;
+            g.m.first_reasoning_ms.get_or_insert(now_ms);
+            g.think_chars += r.chars().count();
+            g.think_tail.push_str(&r);
+            let n = g.think_tail.chars().count();
+            if n > 400 {
+                g.think_tail = g.think_tail.chars().skip(n - 200).collect();
+            }
+            if g.phase != "think" {
+                g.phase = "think";
+                let _ = ctx.channel.send(StreamEvent::Phase { phase: "think".into() });
+            }
+            let due = g.last_think_emit.map_or(true, |t| t.elapsed().as_millis() >= 100);
+            if due {
+                g.last_think_emit = Some(Instant::now());
+                let tail: String = {
+                    let n = g.think_tail.chars().count();
+                    g.think_tail.chars().skip(n.saturating_sub(200)).collect()
+                };
+                let _ = ctx.channel.send(StreamEvent::Thinking { chars: g.think_chars, tail });
+            }
+            return;
+        }
+        SsePayload::Delta(d) => d,
+        _ => return,
+    };
+    {
+        let mut g = ctx.meter.lock().unwrap();
+        let now_ms = g.t0.elapsed().as_millis() as i64;
+        g.m.ttft_ms.get_or_insert(now_ms);
+        g.m.last_content_ms = Some(now_ms);
+        if g.phase != "gen" {
+            if g.phase == "think" && g.think_chars > 0 {
+                // 收尾推一次完整的思考字数
+                let n = g.think_tail.chars().count();
+                let tail: String = g.think_tail.chars().skip(n.saturating_sub(200)).collect();
+                let _ = ctx.channel.send(StreamEvent::Thinking { chars: g.think_chars, tail });
+            }
+            g.phase = "gen";
+            let _ = ctx.channel.send(StreamEvent::Phase { phase: "gen".into() });
+        }
+    }
     raw.push_str(&d);
     for t in machine.feed(&d) {
         let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
         if first_block_ms.is_none() {
             *first_block_ms = Some(t0.elapsed().as_millis() as i64);
+        }
+        {
+            let mut g = ctx.meter.lock().unwrap();
+            let now_ms = g.t0.elapsed().as_millis() as i64;
+            g.m.first_block_ms.get_or_insert(now_ms);
         }
         let (text, hits) = apply_terms(&t.text, &ctx.term_rules);
         let terms_json = if hits.is_empty() {
