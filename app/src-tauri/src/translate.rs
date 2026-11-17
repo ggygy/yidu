@@ -155,8 +155,9 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     let stored = crate::commands::load_prefs(&db).map_err(|e| anyhow!(e))?;
     let eff_prefs = crate::commands::effective_prefs(&stored);
     let custom_prompt = eff_prefs.custom_prompt.clone();
-    // 并发批次(§2.6.3):默认 3;Ollama 本地单卡恒 1
-    let concurrency = if prov_row.kind == "ollama" { 1 } else { eff_prefs.concurrency.clamp(1, 3) as usize };
+    // 批次策略:缓存优先 = 连续对话、串行;速度优先 = 独立请求、并发(默认 3;Ollama 本地单卡恒 1)
+    let cache_mode = eff_prefs.batch_mode == "cache";
+    let concurrency = if prov_row.kind == "ollama" || cache_mode { 1 } else { eff_prefs.concurrency.clamp(1, 3) as usize };
     let system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
 
     let block_vec: Vec<Block> = all_blocks
@@ -187,6 +188,7 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
 
     let ctx = BatchCtx {
         meter: &meter,
+        convo: cache_mode.then(|| std::sync::Mutex::new(Convo { history: Vec::new(), chars: 0 })),
         provider_row: prov_row,
         db: &db,
         article_id,
@@ -260,8 +262,20 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     Ok(())
 }
 
+/// 连续对话模式(「缓存优先」):整篇文章作为一段对话,每批 = 一轮 user / assistant;
+/// 前面的轮次原样保留 → 每次请求的前缀都与上一次相同 → 服务商前缀缓存几乎全部命中。
+struct Convo {
+    history: Vec<(String, String)>,
+    chars: usize,
+}
+
+/// 历史超过这么多字符(约 8k tokens)就重开一段对话(缓存重建一次)
+const CONVO_MAX_CHARS: usize = 24_000;
+
 struct BatchCtx<'a> {
     meter: &'a std::sync::Mutex<SessionMeter>,
+    /// Some = 缓存优先(连续对话,串行);None = 速度优先(独立请求,可并发)
+    convo: Option<std::sync::Mutex<Convo>>,
     provider_row: ProviderRow,
     db: &'a Db,
     article_id: i64,
@@ -416,10 +430,44 @@ impl BatchCtx<'_> {
         self.request_with_note(items, prev, None).await
     }
 
+    /// 当前对话历史(速度优先模式恒空)
+    fn history(&self) -> Vec<(String, String)> {
+        self.convo.as_ref().map(|c| c.lock().unwrap().history.clone()).unwrap_or_default()
+    }
+
+    /// 本批的 user 消息:对话首轮带标题与参考上下文;后续轮次上文已在历史里,只放待译片段
+    fn batch_user(&self, items: &[(usize, String)], prev: &str, first_turn: bool) -> String {
+        let sources: Vec<&str> = items.iter().map(|(_, s)| s.as_str()).collect();
+        if first_turn {
+            prompt::user_msg(&self.title, if prev.is_empty() { None } else { Some(prev) }, &sources)
+        } else {
+            prompt::continue_msg(&sources)
+        }
+    }
+
+    /// 一批完成:把(user, 规范化的 assistant 输出)追加进对话;超长则清空,下批重开
+    fn append_turn(&self, user: String, blocks: &[Tagged]) {
+        let Some(c) = &self.convo else { return };
+        let mut sorted: Vec<&Tagged> = blocks.iter().collect();
+        sorted.sort_by_key(|t| t.id);
+        let assistant: String = sorted
+            .iter()
+            .map(|t| format!("<t id=\"{}\">{}</t>", t.id, prompt::escape_protocol(&t.text)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut g = c.lock().unwrap();
+        g.chars += user.chars().count() + assistant.chars().count();
+        g.history.push((user, assistant));
+        if g.chars > CONVO_MAX_CHARS {
+            g.history.clear();
+            g.chars = 0;
+        }
+    }
+
     /// note:结构签名不一致时附在用户消息末尾的修正说明(§2.2.4 带差异说明重译)
     async fn request_with_note(&self, items: &[(usize, String)], prev: &str, note: Option<&str>) -> Result<(Vec<Tagged>, String, StreamStats)> {
-        let sources: Vec<&str> = items.iter().map(|(_, s)| s.as_str()).collect();
-        let mut user = prompt::user_msg(&self.title, if prev.is_empty() { None } else { Some(prev) }, &sources);
+        let history = self.history();
+        let mut user = self.batch_user(items, prev, history.is_empty());
         if let Some(n) = note {
             user.push_str(&format!(
                 "\nYour previous translation of these segments broke the Markdown structure. Keep the structure identical to the source this time:\n{n}\n"
@@ -431,7 +479,7 @@ impl BatchCtx<'_> {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let t0 = Instant::now();
         let mut handle = tauri::async_runtime::spawn(async move {
-            provider.stream_chat(&system, &user, tx, cancel).await
+            provider.stream_chat(&system, &history, &user, tx, cancel).await
         });
 
         let mut machine = TagStateMachine::new();
@@ -644,6 +692,13 @@ impl BatchCtx<'_> {
             let _ = self.channel.send(StreamEvent::Block { idx: *gi, text: text.clone(), terms: terms_json, format_warn: warn });
             result.push((*gi, text));
         }
+        // 连续对话:本批作为一轮写入历史(只记顶层批;length 减半的子批不入历史)
+        if depth == 0 && self.convo.is_some() && !blocks.is_empty() {
+            let first_turn = self.history().is_empty();
+            let user = self.batch_user(items, prev, first_turn);
+            self.append_turn(user, &blocks);
+        }
+
         // 梯度走完仍有缺失 → 报错但继续后面的批
         let done_ids: std::collections::HashSet<u32> = blocks.iter().map(|b| b.id).collect();
         let still_missing: Vec<u32> = expected.iter().copied().filter(|id| !done_ids.contains(id)).collect();

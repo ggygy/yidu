@@ -85,6 +85,15 @@ pub fn user_msg(title: &str, prev: Option<&str>, blocks: &[&str]) -> String {
     s
 }
 
+/// 连续对话的后续轮次:标题与上文已在前面的轮次里,只给待译片段(编号每轮从 1 开始)
+pub fn continue_msg(blocks: &[&str]) -> String {
+    let mut s = format!("Translate the following {} segments:\n\n", blocks.len());
+    for (i, b) in blocks.iter().enumerate() {
+        s.push_str(&format!("<s id=\"{}\">{}</s>\n", i + 1, escape_protocol(b)));
+    }
+    s
+}
+
 // ---------- 协议转义(§2.2.6) ----------
 // 源文里出现 `<s ` `</s>` `<t ` `</t>` 会打断 <s>/<t> 协议(状态机按 </t> 切块)→ 发送前转成 &lt;…,回收后还原
 
@@ -180,5 +189,13 @@ mod tests {
         assert_eq!(escape_protocol("<span> <table> <th>"), "<span> <table> <th>");
         let msg = user_msg("T", None, &[raw]);
         assert_eq!(msg.matches("</s>").count(), 1, "只剩协议自己的 </s>");
+    }
+
+    #[test]
+    fn continue_turn_has_no_title_or_context() {
+        let m = continue_msg(&["Hello", "World"]);
+        assert!(m.starts_with("Translate the following 2 segments:"));
+        assert!(!m.contains("Document title") && !m.contains("Reference context"));
+        assert!(m.contains("<s id=\"2\">World</s>"));
     }
 }

@@ -134,10 +134,24 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
       <Group title="翻译">
         <Row label="默认方向"><DirPicker value={prefs?.direction ?? "en2zh"} onChange={(d) => applyPrefs({ direction: d })} /></Row>
         <Row label="点词查词">免费词典 → 模型兜底<Toggle on={!!prefs?.dict_fallback} onClick={() => applyPrefs({ dict_fallback: !prefs?.dict_fallback })} /></Row>
-        <Row label="并发批次" title="长文分批翻译时同时发出的请求数;首批始终单独先发。Ollama 本地恒为 1">
-          <Segmented value={String(prefs?.concurrency ?? 3) as "1" | "2" | "3"} options={[["1", "1"], ["2", "2"], ["3", "3"]] as const} onChange={(v) => applyPrefs({ concurrency: Number(v) })} />
+        <Row label="长文分批">
+          <Segmented
+            value={prefs?.batch_mode ?? "speed"}
+            options={[["speed", "速度优先"], ["cache", "缓存优先"]] as const}
+            onChange={(m) => applyPrefs({ batch_mode: m })}
+          />
         </Row>
+        {(prefs?.batch_mode ?? "speed") === "speed" && (
+          <Row label="并发批次" title="同时发出的请求数;首批始终单独先发。Ollama 本地恒为 1">
+            <Segmented value={String(prefs?.concurrency ?? 3) as "1" | "2" | "3"} options={[["1", "1"], ["2", "2"], ["3", "3"]] as const} onChange={(v) => applyPrefs({ concurrency: Number(v) })} />
+          </Row>
+        )}
       </Group>
+      <p className="gf !px-3 -mt-3 mb-4">
+        {(prefs?.batch_mode ?? "speed") === "speed"
+          ? "速度优先:每批独立请求、并行发出,长文最快;每次只有系统提示部分能命中服务商缓存。"
+          : "缓存优先:整篇作为一段对话逐批翻译,前面的批次原样带上,大部分输入命中服务商缓存(按缓存价计费),术语与语气也更连贯;批次串行,长文更慢。总成本是否更低取决于服务商的缓存单价,可在「用量」页对比。"}
+      </p>
       <Group
         title="翻译提示词"
         foot={<>留空 = 内置默认(英文)。支持 {"{from}"} / {"{to}"} 占位;标签协议与方向指令由应用自动附加。<button className="ml-2 border-none bg-transparent text-accent text-[11px] p-0" onClick={() => { setPromptDraft(""); applyPrefs({ custom_prompt: "" }); say("已恢复默认提示词"); }}>恢复默认</button></>}

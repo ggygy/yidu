@@ -21,15 +21,12 @@ pub struct OpenAiCompatible {
     pub temperature: f64,
 }
 
-fn request_body(model: &str, system: &str, user: &str, stream: bool, max_tokens: Option<i64>, temperature: f64) -> Value {
+fn request_body(model: &str, system: &str, history: &[(String, String)], user: &str, stream: bool, max_tokens: Option<i64>, temperature: f64) -> Value {
     let mut body = json!({
         "model": model,
         "stream": stream,
         "temperature": temperature,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
+        "messages": super::chat_messages(system, history, user),
     });
     if stream {
         body["stream_options"] = json!({ "include_usage": true });
@@ -45,6 +42,7 @@ impl super::Provider for OpenAiCompatible {
     async fn stream_chat(
         &self,
         system: &str,
+        history: &[(String, String)],
         user: &str,
         tx: UnboundedSender<SsePayload>,
         cancel: CancelCheck,
@@ -54,7 +52,7 @@ impl super::Provider for OpenAiCompatible {
         let resp = super::send_stream_with_thinking(
             &chat_url(&self.base_url),
             Some(&self.api_key),
-            request_body(&self.model, system, user, true, None, self.temperature),
+            request_body(&self.model, system, history, user, true, None, self.temperature),
             self.thinking.clone(),
             self.provider_id,
             &timing,
@@ -113,7 +111,7 @@ impl super::Provider for OpenAiCompatible {
         let resp = shared_client()
             .post(chat_url(&self.base_url))
             .bearer_auth(&self.api_key)
-            .json(&request_body(&self.model, "You are a connectivity test.", "hi", false, Some(1), self.temperature))
+            .json(&request_body(&self.model, "You are a connectivity test.", &[], "hi", false, Some(1), self.temperature))
             .send()
             .await?;
         let status = resp.status();

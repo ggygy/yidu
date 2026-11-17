@@ -65,9 +65,11 @@ impl Timing {
 pub trait Provider: Send + Sync {
     /// 流式对话:全部载荷(SsePayload)推入 tx;返回聚合统计。
     /// tx 断开(前端取消)或 cancel() 为真时应尽快收尾返回。
+    /// history:此前的 (user, assistant) 轮次,按序置于本次 user 之前(连续对话模式:前缀不变 → 命中服务商缓存)
     async fn stream_chat(
         &self,
         system: &str,
+        history: &[(String, String)],
         user: &str,
         tx: tokio::sync::mpsc::UnboundedSender<SsePayload>,
         cancel: CancelCheck,
@@ -203,6 +205,17 @@ pub fn temperature_of(extra: &str) -> f64 {
         .unwrap_or(DEFAULT_TEMPERATURE)
 }
 
+/// 组装 messages:system → 历史轮次 → 本次 user
+pub fn chat_messages(system: &str, history: &[(String, String)], user: &str) -> serde_json::Value {
+    let mut m = vec![serde_json::json!({ "role": "system", "content": system })];
+    for (u, a) in history {
+        m.push(serde_json::json!({ "role": "user", "content": u }));
+        m.push(serde_json::json!({ "role": "assistant", "content": a }));
+    }
+    m.push(serde_json::json!({ "role": "user", "content": user }));
+    serde_json::Value::Array(m)
+}
+
 pub fn models_url(base_url: &str) -> String {
     let b = base_url.trim_end_matches('/');
     let b = b.strip_suffix("/chat/completions").unwrap_or(b);
@@ -239,5 +252,17 @@ mod tests {
         buf.push(0xa0); // 补全第三字节
         assert_eq!(take_complete_utf8(&mut buf), "你");
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn chat_messages_keep_history_order() {
+        let h = vec![("u1".to_string(), "a1".to_string()), ("u2".to_string(), "a2".to_string())];
+        let m = chat_messages("sys", &h, "u3");
+        let roles: Vec<&str> = m.as_array().unwrap().iter().map(|x| x["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["system", "user", "assistant", "user", "assistant", "user"]);
+        assert_eq!(m[5]["content"], "u3");
+        // 前缀稳定:历史追加一轮后,前面的消息逐字不变 → 服务商前缀缓存可命中
+        let m2 = chat_messages("sys", &[h[0].clone()], "u2");
+        assert_eq!(m.as_array().unwrap()[0..3], m2.as_array().unwrap()[0..3]);
     }
 }
