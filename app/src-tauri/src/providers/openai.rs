@@ -1,6 +1,7 @@
 // OpenAI 兼容实现(DeepSeek / GLM / OpenAI / 任意兼容端点)
 // 请求体与 proto/scripts/protocol-test.mjs 实测一致:stream + include_usage + temperature 1.0
-use super::{chat_url, shared_client, CancelCheck, StreamStats};
+// v0.3 M1:按 host 白名单关思考(thinking.rs)、流式 Accept-Encoding: identity、计时埋点
+use super::{chat_url, shared_client, CancelCheck, StreamStats, Timing};
 use crate::sse::{SseParser, SsePayload};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -13,6 +14,9 @@ pub struct OpenAiCompatible {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    /// 关思考注入字段(None = 不注入)
+    pub thinking: Option<super::thinking::ThinkingParam>,
+    pub provider_id: i64,
 }
 
 fn request_body(model: &str, system: &str, user: &str, stream: bool, max_tokens: Option<i64>) -> Value {
@@ -43,18 +47,18 @@ impl super::Provider for OpenAiCompatible {
         tx: UnboundedSender<SsePayload>,
         cancel: CancelCheck,
     ) -> Result<StreamStats> {
-        let resp = shared_client()
-            .post(chat_url(&self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&request_body(&self.model, system, user, true, None))
-            .send()
-            .await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("HTTP {status}: {body}"));
-        }
+        let timing = Timing::start();
         let mut stats = StreamStats::default();
+        let resp = super::send_stream_with_thinking(
+            &chat_url(&self.base_url),
+            Some(&self.api_key),
+            request_body(&self.model, system, user, true, None),
+            self.thinking.clone(),
+            self.provider_id,
+            &timing,
+            &mut stats,
+        )
+        .await?;
         let mut sse = SseParser::new();
         let mut utf8buf: Vec<u8> = Vec::new();
         let mut stream = resp.bytes_stream();
@@ -63,13 +67,16 @@ impl super::Provider for OpenAiCompatible {
                 return Ok(stats); // 取消:已收到的统计照常返回
             }
             let chunk = chunk?;
+            timing.mark(&mut stats.first_byte_ms);
             utf8buf.extend_from_slice(&chunk);
             let text = super::take_complete_utf8(&mut utf8buf);
             for payload in sse.feed(&text) {
+                timing.observe(&payload, &mut stats);
                 match &payload {
-                    SsePayload::Usage { prompt_tokens, completion_tokens } => {
+                    SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens } => {
                         stats.prompt_tokens = *prompt_tokens;
                         stats.completion_tokens = *completion_tokens;
+                        stats.reasoning_tokens = *reasoning_tokens;
                     }
                     SsePayload::Finish(reason) => {
                         stats.finish_reason = Some(reason.clone());
@@ -84,6 +91,12 @@ impl super::Provider for OpenAiCompatible {
         if !utf8buf.is_empty() {
             let text = String::from_utf8_lossy(&utf8buf).into_owned();
             for payload in sse.feed(&text) {
+                timing.observe(&payload, &mut stats);
+                if let SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens } = &payload {
+                    stats.prompt_tokens = *prompt_tokens;
+                    stats.completion_tokens = *completion_tokens;
+                    stats.reasoning_tokens = *reasoning_tokens;
+                }
                 let _ = tx.send(payload);
             }
         }

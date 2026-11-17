@@ -14,13 +14,13 @@ export type ReaderStyle = {
 };
 
 export const RS_FONTS: Record<ReaderFont, string> = {
-  serif: '"Source Serif 4", Georgia, "Noto Serif SC", "Songti SC", serif',
-  sans: '-apple-system, "Inter", "Noto Sans SC", "PingFang SC", sans-serif',
+  serif: 'ui-serif, "New York", Georgia, "Songti SC", "Noto Serif SC", serif', // 系统衬线(不再打包字体)
+  sans: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif',
   kai: '"Kaiti SC", "STKaiti", "Kaiti", serif',
   mono: '"JetBrains Mono", "SF Mono", Menlo, monospace',
 };
 export const RS_ACCENTS = ["", "#8b5cf6", "#10b981", "#f59e0b", "#ec4899"];
-export const RS_DEFAULT: ReaderStyle = { theme: "default", customBg: "#f5f0e6", font: "serif", size: 16, lineH: 1.8, gap: 10, width: 720, accent: "" };
+export const RS_DEFAULT: ReaderStyle = { theme: "default", customBg: "#f5f0e6", font: "sans", size: 16, lineH: 1.8, gap: 10, width: 720, accent: "" };
 
 // 十六进制亮度(0~1),custom 深底自动配浅字
 function hexLuminance(hex: string): number {
@@ -48,6 +48,16 @@ export function applyReaderStyle(rs: ReaderStyle) {
   localStorage.setItem("yidu-reader", JSON.stringify(rs));
 }
 
+// v0.3 迁移:旧默认字体是打包的 Source Serif 4(serif),一次性改为系统无衬线;之后用户再选 serif 照常保留
+const RS_MIGRATED = "yidu-reader-v03";
+
 export function loadReaderStyle(): ReaderStyle {
-  try { return { ...RS_DEFAULT, ...JSON.parse(localStorage.getItem("yidu-reader") || "{}") }; } catch { return RS_DEFAULT; }
+  try {
+    const rs: ReaderStyle = { ...RS_DEFAULT, ...JSON.parse(localStorage.getItem("yidu-reader") || "{}") };
+    if (localStorage.getItem(RS_MIGRATED) !== "1") {
+      localStorage.setItem(RS_MIGRATED, "1");
+      if (rs.font === "serif") rs.font = "sans";
+    }
+    return rs;
+  } catch { return RS_DEFAULT; }
 }

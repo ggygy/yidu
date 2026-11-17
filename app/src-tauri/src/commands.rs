@@ -341,3 +341,11 @@ pub fn usage_summary(state: State<AppState>) -> Result<UsageSummary, String> {
     let (requests, prompt_tokens, completion_tokens) = state.db.usage_summary().map_err(err)?;
     Ok(UsageSummary { requests, prompt_tokens, completion_tokens })
 }
+
+// ---------- 热键状态 ----------
+
+/// 当前热键注册状态(注册失败时设置页标红;状态变化另有 `hotkey-status` 事件)
+#[tauri::command]
+pub fn hotkey_status(state: State<crate::HotkeyState>) -> crate::HotkeyStatus {
+    state.0.lock().unwrap().clone()
+}

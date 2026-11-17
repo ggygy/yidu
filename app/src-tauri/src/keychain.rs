@@ -3,8 +3,17 @@
 // 授权弹框把 app 卡死的问题(同一路径的二进制 SecItemUpdate 已有项也会弹)。
 use anyhow::Result;
 use keyring::Entry;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 const SERVICE: &str = "com.yidu.desktop";
+
+/// 会话内缓存(v0.3 §1):每次翻译请求都读 Keychain 既慢又可能弹授权框。
+/// 值 = 读到的结果(含「确认没有」);只有 set_key 会改写,读失败(非 NoEntry)不缓存。
+fn cache() -> &'static Mutex<HashMap<i64, Option<String>>> {
+    static CACHE: OnceLock<Mutex<HashMap<i64, Option<String>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 fn entry(provider_id: i64) -> Result<Entry> {
     Ok(Entry::new(SERVICE, &format!("provider-{provider_id}"))?)
@@ -18,16 +27,23 @@ pub fn set_key(provider_id: i64, key: &str) -> Result<()> {
     } else {
         e.set_password(key)?;
     }
+    let v = if key.is_empty() { None } else { Some(key.to_string()) };
+    cache().lock().unwrap().insert(provider_id, v);
     Ok(())
 }
 
 pub fn get_key(provider_id: i64) -> Result<Option<String>> {
-    let e = entry(provider_id)?;
-    match e.get_password() {
-        Ok(k) => Ok(Some(k)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => Err(err.into()),
+    if let Some(v) = cache().lock().unwrap().get(&provider_id) {
+        return Ok(v.clone());
     }
+    let e = entry(provider_id)?;
+    let v = match e.get_password() {
+        Ok(k) => Some(k),
+        Err(keyring::Error::NoEntry) => None,
+        Err(err) => return Err(err.into()),
+    };
+    cache().lock().unwrap().insert(provider_id, v.clone());
+    Ok(v)
 }
 
 /// dev 环境变量后备(仅 debug 构建)

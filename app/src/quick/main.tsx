@@ -4,14 +4,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit, listen } from "@tauri-apps/api/event";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { DEMO_INPUT } from "../data";
 import { CodeBox, Md } from "../md";
 import { Icon } from "../icons";
 import * as api from "../api";
 import { dirLabel, dirShort, detectDir } from "../languages";
 import { DirPicker } from "../dirselect";
 import { applyReaderStyle, loadReaderStyle, type ReaderStyle } from "../reader";
-import type { Block, Prefs, Provider, StreamEvent } from "../types";
+import { addUsage, EMPTY_USAGE } from "../types";
+import type { Block, Prefs, Provider, SessionUsage, StreamEvent } from "../types";
 import "../styles.css";
 
 // macOS 头部需给系统红绿灯让位;Windows 有原生标题栏
@@ -43,11 +43,13 @@ function QuickApp() {
   const [err, setErr] = useState<string | null>(null);
   const [direction, setDirection] = useState("en2zh");
   const [pin, setPin] = useLocalFlag("q-pin", true);
-  const [hideOnBlur, setHideOnBlur] = useLocalFlag("q-blur-hide", false);
   const [auto, setAuto] = useLocalFlag("q-auto", true);
   const [showEn, setShowEn] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const [usage, setUsage] = useState<SessionUsage>(EMPTY_USAGE); // 本次翻译累计 token(usage 事件)
+  // 失焦隐藏:与主窗设置共用 prefs.blur_hide(v0.2 曾是本窗 localStorage「实验开关」,两处不同步)
+  const hideOnBlur = !!prefs?.blur_hide;
   const sessionRef = useRef(0);
   const [dirOpen, setDirOpen] = useState(false);
   const [provOpen, setProvOpen] = useState(false);
@@ -56,6 +58,10 @@ function QuickApp() {
 
   const active = providers.find((p) => p.is_active);
   const outText = blocks.filter((b) => b.trans).map((b) => b.trans).join("\n\n");
+
+  // 写 prefs 并广播给主窗(v0.2 快捷窗改方向不广播,主窗方向停在旧值)
+  const savePrefs = (u: Partial<Prefs>) =>
+    api.setPrefs(u).then((p) => { setPrefs(p); setDirection(p.direction); emit("prefs-changed", p).catch(() => {}); return p; });
 
   const refreshProviders = () => api.providerList().then((p) => { setProviders(p); emit("providers-changed", p).catch(() => {}); }).catch(() => {});
   useEffect(() => {
@@ -107,25 +113,27 @@ function QuickApp() {
   }, [hideOnBlur, pin]);
 
   // 唤出事件(Rust toggle_quick 发来):新剪贴板内容预填「假划词」
+  // 监听只挂一次,经 ref 取最新的 auto / fire(v0.2 闭包只随 auto 重建,fire 里的 direction 停在旧值)
+  const shownRef = useRef<(t: string) => void>(() => {});
   useEffect(() => {
     const un = listen("quick-shown", async () => {
       try {
         const t = await readText();
         if (t && t.trim() && clipHash(t) !== localStorage.getItem("q-last-clip")) {
           localStorage.setItem("q-last-clip", clipHash(t));
-          setInput(t);
-          if (auto) fire(t);
+          shownRef.current(t);
         }
       } catch { /* 浏览器降级 */ }
     });
     return () => { un.then((f) => f()); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto]);
+  }, []);
 
   const onEvent = (e: StreamEvent) => {
     if (e.type === "created") {
       setArticleId(e.article_id); // 翻译即自动入库(工单 08)
       setBlocks(e.blocks);
+    } else if (e.type === "usage") {
+      setUsage((u) => addUsage(u, e));
     } else if (e.type === "block") {
       setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "done" } : b)));
     } else if (e.type === "partial") {
@@ -144,6 +152,7 @@ function QuickApp() {
     setErr(null);
     setBlocks([]);
     setArticleId(null);
+    setUsage(EMPTY_USAGE);
     // auto = 按文字特征识别源语言再定方向(发送前解析,Rust 只见具体方向)
     const effDir = direction === "auto" ? detectDir(text) : direction;
     try {
@@ -164,6 +173,7 @@ function QuickApp() {
     setInput(t);
     if (auto && t.trim()) fire(t);
   };
+  shownRef.current = pasteOrType; // 每次渲染更新:quick-shown 总是用最新 direction / auto
 
   const openInMain = async () => {
     if (!articleId) return;
@@ -197,13 +207,8 @@ function QuickApp() {
 
   const togglePin = () => {
     const next = !pin;
-    if (next && hideOnBlur) { setHideOnBlur(false); say("已关闭「失焦隐藏」:两者互斥"); }
+    if (next && hideOnBlur) { savePrefs({ blur_hide: false }).catch(() => {}); say("已关闭「失焦隐藏」:两者互斥"); }
     setPin(next);
-  };
-  const toggleBlur = () => {
-    const next = !hideOnBlur;
-    if (next && pin) { setPin(false); say("已关闭 pin:失焦隐藏生效"); }
-    setHideOnBlur(next);
   };
 
   const streaming = phase === "streaming";
@@ -262,7 +267,7 @@ function QuickApp() {
       <div className="flex items-center gap-4 px-4 pt-0.5">
         <div className="relative">
           <button
-            className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 " + (direction === "auto" ? "text-accent font-medium" : "text-t2")}
+            className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 whitespace-nowrap flex-none " + (direction === "auto" ? "text-accent font-medium" : "text-t2")}
             title={direction === "auto" ? `自动识别:${dirLabel(detectDir(input))}` : "翻译方向"}
             onClick={(e) => { e.stopPropagation(); setDirOpen(!dirOpen); setProvOpen(false); }}
           >
@@ -272,27 +277,27 @@ function QuickApp() {
             <div className="absolute z-30 top-full mt-1 left-0 bg-surface border border-line rounded-xl shadow-[var(--shadow-card)] px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
               <DirPicker
                 value={direction}
-                onChange={(d) => { setDirection(d); setDirOpen(false); api.setPrefs({ direction: d }).then(setPrefs).catch(() => {}); }}
+                onChange={(d) => { setDirection(d); setDirOpen(false); savePrefs({ direction: d }).catch(() => {}); }}
               />
             </div>
           )}
         </div>
-        <button className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 " + (auto ? "text-accent font-medium" : "text-t2")} onClick={() => setAuto(!auto)}>
+        <button className={"flex items-center gap-1.5 border-none bg-none text-xs cursor-pointer px-0.5 py-1 hover:text-t1 whitespace-nowrap flex-none " + (auto ? "text-accent font-medium" : "text-t2")} onClick={() => setAuto(!auto)}>
           <Icon n="zap" size={13} /> 粘贴即译{auto ? "" : " ·关"}
         </button>
         <span className="flex-1" />
         <div className="relative">
           {active ? (
             <button
-              className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1"
+              className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1 whitespace-nowrap flex-none max-w-[160px]"
               title={`模型 ${active.model} · 点击选择 Provider`}
               onClick={(e) => { e.stopPropagation(); setProvOpen(!provOpen); setDirOpen(false); }}
             >
-              <i className="w-[5px] h-[5px] rounded-full bg-ok" />{active.name}<Icon n="chev" size={11} />
+              <i className="w-[5px] h-[5px] rounded-full bg-ok flex-none" /><span className="truncate">{active.name}</span><Icon n="chev" size={11} />
             </button>
           ) : (
             <button
-              className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1"
+              className="flex items-center gap-1.5 h-[26px] border-none bg-surface2 rounded-lg px-2 text-[10.5px] text-t2 cursor-pointer hover:text-t1 whitespace-nowrap flex-none max-w-[160px]"
               onClick={openSettingsInMain}
             >
               未配置<Icon n="chev" size={11} />
@@ -308,7 +313,7 @@ function QuickApp() {
                   onClick={() => switchProvider(p.id)}
                 >
                   <span className="w-[5px] flex-none">{p.is_active && <i className="block w-[5px] h-[5px] rounded-full bg-ok" />}</span>
-                  <span className={p.is_active ? "text-t1 font-semibold" : ""}>{p.name}</span>
+                  <span className={"whitespace-nowrap " + (p.is_active ? "text-t1 font-semibold" : "")}>{p.name}</span>
                   <span className="ml-auto font-code text-[10px] text-t3">{p.model}</span>
                 </button>
               ))}
@@ -326,7 +331,7 @@ function QuickApp() {
         <textarea
           className="w-full h-[76px] border-none outline-none resize-none bg-transparent text-[12.5px] leading-[1.55] text-t1 placeholder:text-t3"
           value={input}
-          placeholder="⌘V 粘贴文本或截图(P1 识别)· markdown"
+          placeholder="⌘V 粘贴文本 · 支持 markdown"
           onChange={(e) => setInput(e.target.value)}
           onPaste={(e) => {
             const t = e.clipboardData.getData("text");
@@ -343,8 +348,7 @@ function QuickApp() {
           <kbd title="翻译">⌘↩</kbd>
           <kbd title="取消">Esc</kbd>
           <span className="flex-1" />
-          <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent whitespace-nowrap" onClick={() => { setInput(DEMO_INPUT); fire(DEMO_INPUT); }}>演示 ⚡</button>
-          {input && <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent whitespace-nowrap" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); }}>清空</button>}
+          {input && <button className="border-none bg-none text-[10.5px] text-t3 cursor-pointer px-1 py-0.5 hover:text-accent whitespace-nowrap flex-none" onClick={() => { setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); }}>清空</button>}
           <button
             className="flex items-center gap-1 h-[26px] px-3 border-none bg-accent text-white rounded-[8px] text-[11px] font-medium cursor-pointer disabled:opacity-40 disabled:cursor-default whitespace-nowrap flex-none"
             disabled={!input.trim() || streaming}
@@ -358,7 +362,7 @@ function QuickApp() {
 
       {/* 输出:逐块流式 md 渲染;阅读区接 --reader-bg/--reader-t1(黑背景/OLED 等阅读外观在此生效) */}
       <div
-        className="flex-1 overflow-y-auto px-4 pt-3 pb-[74px] flex flex-col gap-2.5"
+        className="flex-1 overflow-y-auto px-4 pt-3 pb-[66px] flex flex-col gap-2.5"
         style={{ background: "var(--reader-bg, transparent)", color: "var(--reader-t1, var(--t1))" }}
       >
         {err && <p className="text-[#d25a5a] text-[11.5px] bg-[rgba(210,90,90,0.08)] rounded-lg px-2.5 py-2 m-0">{err}</p>}
@@ -422,23 +426,24 @@ function QuickApp() {
         )}
       </div>
 
-      {/* 交互提示 */}
-      <div className="absolute inset-x-0 bottom-[62px] text-center text-[9.5px] text-t3 z-[19]">
-        实验开关:
-        <a className="cursor-pointer" style={{ color: hideOnBlur ? "var(--accent)" : "inherit" }} onClick={toggleBlur}>[失焦隐藏:{hideOnBlur ? "开" : "关"}]</a>
-        {" · 热键唤出 · 自动入库"}
-      </div>
-
       {/* 悬浮操作胶囊 */}
       <div className="absolute left-3.5 right-3.5 bottom-3.5 h-11 bg-surface border border-line rounded-[22px] shadow-[var(--shadow-capsule)] flex items-center gap-1.5 pl-2.5 pr-2 z-20">
-        <button className="flex items-center gap-1.5 h-8 px-3 border-none bg-surface2 rounded-full text-[11.5px] text-t2 cursor-pointer disabled:opacity-40" disabled={!outText} onClick={() => navigator.clipboard?.writeText(outText).then(() => say("已复制"))}>
+        <button className="flex items-center gap-1.5 h-8 px-3 border-none bg-surface2 rounded-full text-[11.5px] text-t2 cursor-pointer disabled:opacity-40 whitespace-nowrap flex-none" disabled={!outText} onClick={() => navigator.clipboard?.writeText(outText).then(() => say("已复制"))}>
           <Icon n="copy" size={13} /> 复制
         </button>
-        <button className={"flex items-center gap-1.5 h-8 px-3 border-none rounded-full text-[11.5px] cursor-pointer disabled:opacity-40 " + (showEn ? "bg-accentsoft text-accent font-medium" : "bg-surface2 text-t2")} disabled={!blocks.length} title="对照(⌘D)" onClick={() => setShowEn(!showEn)}>
+        <button className={"flex items-center gap-1.5 h-8 px-3 border-none rounded-full text-[11.5px] cursor-pointer disabled:opacity-40 whitespace-nowrap flex-none " + (showEn ? "bg-accentsoft text-accent font-medium" : "bg-surface2 text-t2")} disabled={!blocks.length} title="对照(⌘D)" onClick={() => setShowEn(!showEn)}>
           <Icon n="eye" size={13} /> 对照
         </button>
-        <span className="flex-1" />
-        <button className="flex items-center gap-1.5 h-8 px-3 border-none rounded-full text-[11.5px] font-medium text-accent cursor-pointer bg-none disabled:opacity-40 disabled:text-t3" disabled={!articleId} onClick={openInMain}>
+        <span className="flex-1 min-w-0" />
+        {usage.requests > 0 && (
+          <span
+            className="flex-none whitespace-nowrap font-code text-[10.5px] text-t3"
+            title={`本次 ${usage.requests} 次请求 · 输入 ${usage.prompt_tokens} · 输出 ${usage.completion_tokens}${usage.reasoning_tokens ? `(含思考 ${usage.reasoning_tokens})` : ""} tokens`}
+          >
+            {usage.completion_tokens} tok
+          </span>
+        )}
+        <button className="flex items-center gap-1.5 h-8 px-3 border-none rounded-full text-[11.5px] font-medium text-accent cursor-pointer bg-none disabled:opacity-40 disabled:text-t3 whitespace-nowrap flex-none" disabled={!articleId} onClick={openInMain}>
           <Icon n="fileplus" size={13} /> 在主窗打开
         </button>
       </div>

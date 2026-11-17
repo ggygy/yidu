@@ -2,7 +2,7 @@
 // 断点续译:只译 trans_status != done 的块;取消保留已完成块。
 use crate::batch;
 use crate::blocks::{self, Block, BlockKind};
-use crate::db::{BlockRow, Db, ProviderRow};
+use crate::db::{ArticleRow, BlockRow, Db, ProviderRow, UsageRecord};
 use crate::prompt;
 use crate::providers::{self, CancelCheck, StreamStats};
 use crate::sse::{SsePayload, TagStateMachine, Tagged};
@@ -20,10 +20,11 @@ use tokio::sync::mpsc;
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
-    Created { article_id: i64, blocks: Vec<BlockRow> },
+    /// 带上 article 行:主窗直接据此建文档,不再重拉(v0.2 重拉期间早到的 block/partial 被丢)
+    Created { article_id: i64, article: ArticleRow, blocks: Vec<BlockRow> },
     Block { idx: usize, text: String, terms: String },
     Partial { idx: usize, text: String },
-    Usage { prompt_tokens: i64, completion_tokens: i64 },
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
     Done { article_id: i64 },
     Error { message: String },
 }
@@ -100,7 +101,8 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
         }
     };
     let (article, all_blocks) = db.get_article(article_id)?;
-    let _ = channel.send(StreamEvent::Created { article_id, blocks: all_blocks.clone() });
+    let title = article.title.clone();
+    let _ = channel.send(StreamEvent::Created { article_id, article, blocks: all_blocks.clone() });
 
     // 待译块(非 done;code 建库时已是 done)
     let pending: Vec<usize> = all_blocks
@@ -133,7 +135,7 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
         provider_row: prov_row,
         db: &db,
         article_id,
-        title: article.title,
+        title,
         system,
         channel,
         cancel: cancelled,
@@ -264,19 +266,30 @@ impl BatchCtx<'_> {
         (self.cancel)()
     }
 
-    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64) {
-        let _ = self.db.insert_usage(
-            self.provider_row.id,
-            Some(self.article_id),
-            "translate",
-            stats.prompt_tokens,
-            stats.completion_tokens,
-            elapsed_ms,
-        );
+    /// 一次 HTTP 请求结束:写 usage_log(含计时埋点)并推 usage 事件
+    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>) {
+        if stats.thinking_unsupported {
+            let _ = self.db.mark_provider_thinking_unsupported(self.provider_row.id);
+        }
+        let _ = self.db.insert_usage(&UsageRecord {
+            provider_id: self.provider_row.id,
+            article_id: Some(self.article_id),
+            kind: "translate".into(),
+            prompt_tokens: stats.prompt_tokens,
+            completion_tokens: stats.completion_tokens,
+            latency_ms: elapsed_ms,
+            ttft_ms: stats.first_content_ms,
+            first_block_ms,
+            first_byte_ms: stats.first_byte_ms,
+            reasoning_tokens: stats.reasoning_tokens,
+            batch_blocks: items.len() as i64,
+            batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
+        });
         if stats.prompt_tokens > 0 || stats.completion_tokens > 0 {
             let _ = self.channel.send(StreamEvent::Usage {
                 prompt_tokens: stats.prompt_tokens,
                 completion_tokens: stats.completion_tokens,
+                reasoning_tokens: stats.reasoning_tokens,
             });
         }
     }
@@ -297,6 +310,7 @@ impl BatchCtx<'_> {
         let mut machine = TagStateMachine::new();
         let mut raw = String::new();
         let mut out: Vec<Tagged> = Vec::new();
+        let mut first_block_ms: Option<i64> = None;
         loop {
             let step = tokio::select! {
                 m = rx.recv() => match m {
@@ -306,24 +320,24 @@ impl BatchCtx<'_> {
                 res = &mut handle => Step::ProviderDone(res.map_err(|e| anyhow!("provider 任务异常: {e}")).and_then(|r| r)),
             };
             match step {
-                Step::Payload(p) => process_payload(self, p, items, &mut machine, &mut raw, &mut out),
+                Step::Payload(p) => process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms),
                 Step::Closed => {
                     // tx 断开 = provider 已结束,join 立即就绪
                     let stats = handle
                         .await
                         .map_err(|e| anyhow!("provider 任务异常: {e}"))??;
                     while let Ok(p) = rx.try_recv() {
-                        process_payload(self, p, items, &mut machine, &mut raw, &mut out);
+                        process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64);
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Ok(stats)) => {
                     // provider 已结束:收干通道内残留载荷再返回
                     while let Ok(p) = rx.try_recv() {
-                        process_payload(self, p, items, &mut machine, &mut raw, &mut out);
+                        process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64);
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Err(e)) => return Err(e),
@@ -382,7 +396,7 @@ impl BatchCtx<'_> {
             if !missing.is_empty() && round < 2 {
                 let sub: Vec<(usize, String)> = missing
                     .iter()
-                    .filter_map(|id| items.get(*id as usize - 1).cloned())
+                    .filter_map(|id| items.get((*id as usize).wrapping_sub(1)).cloned())
                     .collect();
                 if !sub.is_empty() {
                     if let Ok((extra, _, _)) = self.request(&sub, prev).await {
@@ -410,7 +424,7 @@ impl BatchCtx<'_> {
                     if self.cancelled() {
                         break;
                     }
-                    let Some(item) = items.get(id as usize - 1) else { continue };
+                    let Some(item) = items.get((id as usize).wrapping_sub(1)) else { continue };
                     if let Ok((single, _, _)) = self.request(std::slice::from_ref(item), prev).await {
                         if let Some(t) = single.into_iter().next() {
                             blocks.push(t);
@@ -425,7 +439,7 @@ impl BatchCtx<'_> {
         // 终值落库 + 推送(流式期间已推过的按 idx 覆盖)
         let mut result = Vec::new();
         for t in &blocks {
-            let Some((gi, _)) = items.get(t.id as usize - 1) else { continue };
+            let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
             let (text, hits) = apply_terms(&t.text, &self.term_rules);
             let terms_json = if hits.is_empty() {
                 String::new()
@@ -458,11 +472,17 @@ fn process_payload(
     machine: &mut TagStateMachine,
     raw: &mut String,
     out: &mut Vec<Tagged>,
+    t0: &Instant,
+    first_block_ms: &mut Option<i64>,
 ) {
+    // Reasoning 不进状态机与 raw(思考文本绝不进译文);M1 只在 provider 层计时
     let SsePayload::Delta(d) = p else { return };
     raw.push_str(&d);
     for t in machine.feed(&d) {
-        let Some((gi, _)) = items.get(t.id as usize - 1) else { continue };
+        let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
+        if first_block_ms.is_none() {
+            *first_block_ms = Some(t0.elapsed().as_millis() as i64);
+        }
         let (text, hits) = apply_terms(&t.text, &ctx.term_rules);
         let terms_json = if hits.is_empty() {
             String::new()
@@ -477,7 +497,7 @@ fn process_payload(
         out.push(Tagged { id: t.id, text: t.text.clone() });
     }
     if let Some((id, text)) = machine.partial() {
-        if let Some((gi, _)) = items.get(id as usize - 1) {
+        if let Some((gi, _)) = items.get((id as usize).wrapping_sub(1)) {
             let _ = ctx.channel.send(StreamEvent::Partial { idx: *gi, text });
         }
     }

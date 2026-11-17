@@ -3,6 +3,7 @@
 
 pub mod ollama;
 pub mod openai;
+pub mod thinking;
 
 use crate::db::ProviderRow;
 use crate::sse::SsePayload;
@@ -18,7 +19,44 @@ pub type CancelCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 pub struct StreamStats {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+    /// 思考 token(`usage.completion_tokens_details.reasoning_tokens`;Ollama 无)
+    pub reasoning_tokens: i64,
     pub finish_reason: Option<String>,
+    /// 计时埋点(§2.6.8,均为相对请求发出的毫秒):响应头 / 首字节 / 首 reasoning / 首正文
+    pub headers_ms: Option<i64>,
+    pub first_byte_ms: Option<i64>,
+    pub first_reasoning_ms: Option<i64>,
+    pub first_content_ms: Option<i64>,
+    /// 本次请求探明「关思考字段不被支持」并已去字段重试 → 调用方写回 providers.extra
+    pub thinking_unsupported: bool,
+}
+
+/// 流式请求计时器:send 前创建,载荷到达时打点
+pub struct Timing {
+    t0: std::time::Instant,
+}
+
+impl Timing {
+    pub fn start() -> Self {
+        Timing { t0: std::time::Instant::now() }
+    }
+    pub fn ms(&self) -> i64 {
+        self.t0.elapsed().as_millis() as i64
+    }
+    /// 首次打点(已有值不覆盖)
+    pub fn mark(&self, slot: &mut Option<i64>) {
+        if slot.is_none() {
+            *slot = Some(self.ms());
+        }
+    }
+    /// 按载荷类型打点首 reasoning / 首正文
+    pub fn observe(&self, p: &SsePayload, stats: &mut StreamStats) {
+        match p {
+            SsePayload::Delta(_) => self.mark(&mut stats.first_content_ms),
+            SsePayload::Reasoning(_) => self.mark(&mut stats.first_reasoning_ms),
+            _ => {}
+        }
+    }
 }
 
 #[async_trait]
@@ -56,14 +94,73 @@ pub fn build(row: &ProviderRow) -> Result<Box<dyn Provider>> {
             base_url: row.base_url.clone(),
             model: row.model.clone(),
             api_key: key.unwrap_or_default(),
+            thinking: thinking::param_for(row.id, &row.kind, &row.base_url, &row.model, &row.extra),
+            provider_id: row.id,
         })),
         "ollama" => Ok(Box::new(ollama::Ollama {
             base_url: row.base_url.clone(),
             model: row.model.clone(),
             extra: row.extra.clone(),
+            thinking: thinking::param_for(row.id, &row.kind, &row.base_url, &row.model, &row.extra),
+            provider_id: row.id,
         })),
         other => Err(anyhow!("未知 provider 类型:{other}")),
     }
+}
+
+/// 流式 POST + 关思考兜底(§2.6.1/§2.6.4):
+/// - 流式请求加 `Accept-Encoding: identity`,消除中间层因压缩攒包;
+/// - body 注入 thinking 字段;400 且错误体提及该字段 → 先试降级值(reasoning_effort none→low),
+///   再去字段重试一次,并标记该 provider 不支持(stats.thinking_unsupported)。
+/// 返回成功响应;headers_ms 已打点。
+pub async fn send_stream_with_thinking(
+    url: &str,
+    bearer: Option<&str>,
+    mut body: serde_json::Value,
+    thinking_param: Option<thinking::ThinkingParam>,
+    provider_id: i64,
+    timing: &Timing,
+    stats: &mut StreamStats,
+) -> Result<reqwest::Response> {
+    let mut param = thinking_param;
+    if let Some((field, value)) = &param {
+        body[*field] = value.clone();
+    }
+    // 最多 3 次:原值 → 降级值 → 去字段
+    for _ in 0..3 {
+        let mut req = shared_client()
+            .post(url)
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .json(&body);
+        if let Some(k) = bearer {
+            req = req.bearer_auth(k);
+        }
+        let resp = req.send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            timing.mark(&mut stats.headers_ms);
+            return Ok(resp);
+        }
+        let text = resp.text().await.unwrap_or_default();
+        let Some((field, value)) = param.clone() else {
+            return Err(anyhow!("HTTP {status}: {text}"));
+        };
+        if !thinking::error_mentions(field, status.as_u16(), &text) {
+            return Err(anyhow!("HTTP {status}: {text}"));
+        }
+        if let Some(fb) = thinking::fallback_value(field, &value) {
+            body[field] = fb.clone();
+            param = Some((field, fb));
+            continue;
+        }
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove(field);
+        }
+        param = None;
+        thinking::mark_unsupported(provider_id);
+        stats.thinking_unsupported = true;
+    }
+    Err(anyhow!("请求多次失败(关思考字段兜底已用尽)"))
 }
 
 /// 取字节缓冲里完整 UTF-8 前缀,残缺尾序列留存(多字节字符跨 chunk 分裂保护)
