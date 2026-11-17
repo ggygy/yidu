@@ -1,0 +1,60 @@
+app/src-tauri/src/translate.rs
+  s_078392dfaaf413::t_0f70d1615bff0c 5,23-24,27,104-105,138,269-287,292,313,323,330,332,338,340,475-476,478,482-485
+  s_078392dfaaf413::t_7489e78ece0fd5 399,427,442,500
+app/src-tauri/src/providers/ollama.rs
+  s_078392dfaaf413::t_39f3d7a197a7e1 2-4,18-19,22-23,28,37,43-51,54-58,92,94-103,112,117,121,149-150,155,157,167-169
+app/src-tauri/src/providers/openai.rs
+  s_078392dfaaf413::t_fc57958a7fce17 3-4,17-19,50,52-61,70,74,76,79,94-99
+app/src-tauri/src/db.rs
+  s_078392dfaaf413::t_9d48adb45ac7d4 131-142,203-221,636,639-656,661-673
+  s_078392dfaaf413::t_9bc2853c388222 704-769
+app/src-tauri/src/keychain.rs
+  s_078392dfaaf413::t_768f8d251cc68c 6-7,11-17,30-31,36-37,39-46
+app/src-tauri/src/lib.rs
+  s_078392dfaaf413::t_0b3ad0722e20f6 242,244-256
+  s_078392dfaaf413::t_26d6ee4d1ccd51 65-66
+  s_078392dfaaf413::t_831bcd06a346ef 16-17,38-64,67-116,127-128,134-159,186-196,200-201,208-210,238,240-241
+app/src-tauri/src/providers/mod.rs
+  s_078392dfaaf413::t_d1110791ca2e39 111-165
+  s_078392dfaaf413::t_709e5eb50dd59c 6,22-23,25-59,97-98,104-105
+app/src-tauri/src/providers/thinking.rs
+  s_078392dfaaf413::t_c3c503dd5f4745 1-24,27-160
+  s_078392dfaaf413::t_31990902de14b9 25-26
+app/src-tauri/src/commands.rs
+  s_078392dfaaf413::t_831bcd06a346ef 344-351
+app/src/reader.ts
+  s_078392dfaaf413::t_24b1236dcd29d1 17-18,23,51-53,55-62
+app/src/styles.css
+  s_078392dfaaf413::t_24b1236dcd29d1 42-43,113
+app/src/types.ts
+  s_078392dfaaf413::t_c738217f709ce5 38,41,45-68
+app/src-tauri/src/batch.rs
+  s_078392dfaaf413::t_92941114918aa2 2,7-10,42-44,46-67,116-125,127-134,137-162,167,170-174,179,181-182,187,189-193
+app/src/main.tsx
+  s_078392dfaaf413::t_f4cf211adf402e 892-894,899,908,915
+  s_078392dfaaf413::t_c60e803d56cbe7 663
+  s_078392dfaaf413::t_f2fbad4f265cd7 13-14,108,258-263,529-532,535,784,807-808,898,900-901,903-904,937,953
+  s_078392dfaaf413::t_0a42e6288ceac6 1189,1198,1201,1205,1208-1215,1218
+app/src/quick/main.tsx
+  s_078392dfaaf413::t_1dfd05acd680ca 13-14,50-52,62-65,116-117,124,129,135-136,155,176,210,270,280,285,292,296,300,316,334,351,365,431,434,437-446
+app/src/api.ts
+  s_078392dfaaf413::t_c738217f709ce5 3,72-73
+app/src-tauri/src/sse.rs
+  s_078392dfaaf413::t_8cbfee428ad6cd 8-12,34,40-44,47,51-72,77-81,83,168,181-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "d0b3671e0c394f7e9ce1c0c29a21a9a2a2e3eb17",
+  "prompts": {},
+  "sessions": {
+    "s_078392dfaaf413": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c81f6b8-f1af-4ec5-ad4a-f54f2335a07d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
