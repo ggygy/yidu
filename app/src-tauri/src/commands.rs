@@ -495,3 +495,11 @@ pub async fn open_settings(app: tauri::AppHandle, section: Option<String>) -> Re
     crate::native::show_settings(&app, section.as_deref());
     Ok(())
 }
+
+/// 设置页预览:当前思考设置实际会附加到请求体的字段(JSON;空串 = 不附加)
+#[tauri::command]
+pub fn thinking_preview(form: ProviderForm) -> String {
+    providers::thinking::param_for(i64::MIN, &form.kind, &form.base_url, &form.model, form.extra.as_deref().unwrap_or("{}"))
+        .map(|m| serde_json::Value::Object(m).to_string())
+        .unwrap_or_default()
+}

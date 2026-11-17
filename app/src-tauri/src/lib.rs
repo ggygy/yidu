@@ -240,6 +240,7 @@ pub fn run() {
             commands::provider_test_form,
             commands::provider_models,
             commands::provider_key_hint,
+            commands::thinking_preview,
             commands::lookup_word,
             commands::vocab_add,
             commands::vocab_list,

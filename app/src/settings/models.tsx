@@ -3,10 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
 import { Icon } from "../icons";
 import {
-  PRESETS, THINKING_OPTIONS, autoThinkingNote, cachedModels, clearTest, fetchModels, parseExtra, runTest, testState, uniqueName,
+  PRESETS, THINKING_FORMATS, THINKING_MODES, cachedModels, thinkingOf, clearTest, fetchModels, parseExtra, runTest, testState, uniqueName,
   type TestState,
 } from "../providers";
-import { ConfirmCard } from "../ui";
+import { ConfirmCard, Segmented } from "../ui";
 import type { Provider, TestResult } from "../types";
 
 function StatusDot({ t }: { t: TestState | null }) {
@@ -143,8 +143,10 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
   const [base, setBase] = useState(p.base_url);
   const [model, setModel] = useState(p.model);
   const extra = parseExtra(p);
-  const [thinking, setThinking] = useState(extra.thinking_control ?? "auto");
+  const [tmode, setTmode] = useState(thinkingOf(extra).mode);
+  const [tformat, setTformat] = useState(thinkingOf(extra).format);
   const [custom, setCustom] = useState(extra.thinking_custom ?? "");
+  const [preview, setPreview] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState(!p.has_key && p.kind !== "ollama");
   const [keyDraft, setKeyDraft] = useState("");
@@ -182,9 +184,16 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
   useEffect(() => () => window.clearTimeout(saveTimer.current), []);
   useEffect(() => { setResult(testState({ ...p, base_url: base, model })); }, [base, model]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveExtra = async (control: string, customJson: string) => {
-    const next = { ...parseExtra(p), thinking_control: control, thinking_custom: customJson || undefined };
-    delete next.thinking_unsupported; // 换了方式,重新探测
+  // 实际会附加的字段:随设置 / 地址 / 模型实时预览
+  useEffect(() => {
+    const ex = JSON.stringify({ thinking_mode: tmode, thinking_format: tformat, thinking_custom: custom || undefined });
+    api.thinkingPreview({ id: p.id, kind: p.kind, base_url: base, model, extra: ex }).then(setPreview).catch(() => setPreview(null));
+  }, [tmode, tformat, custom, base, model, p.id, p.kind]);
+
+  const saveExtra = async (mode: string, format: string, customJson: string) => {
+    const next = { ...parseExtra(p), thinking_mode: mode, thinking_format: format, thinking_custom: customJson || undefined };
+    delete next.thinking_control; // 旧版单选字段
+    delete next.thinking_unsupported; // 换了设置,重新探测
     try {
       await api.providerSave({ id: p.id, name: p.name, kind: p.kind, base_url: p.base_url, model: p.model, extra: JSON.stringify(next) });
       await refreshProviders();
@@ -312,20 +321,30 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
           )}
         </div>
         <div className="gr">
-          <span className="w-[64px] flex-none">思考控制</span>
-          <select className="field !h-[24px] flex-1 min-w-0" value={thinking} onChange={(e) => { setThinking(e.target.value); saveExtra(e.target.value, custom); }}>
-            {THINKING_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
+          <span className="w-[64px] flex-none">思考</span>
+          <Segmented value={tmode} options={THINKING_MODES} onChange={(m) => { setTmode(m); saveExtra(m, tformat, custom); }} />
         </div>
-        {thinking === "custom" && (
+        {tmode !== "default" && (
+          <div className="gr">
+            <span className="w-[64px] flex-none">字段格式</span>
+            <select className="field !h-[24px] flex-1 min-w-0" value={tformat} onChange={(e) => { setTformat(e.target.value); saveExtra(tmode, e.target.value, custom); }}>
+              {THINKING_FORMATS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        )}
+        {tmode !== "default" && tformat === "custom" && (
           <div className="gr">
             <span className="w-[64px] flex-none text-t3">字段</span>
-            <input className="field mono flex-1" value={custom} placeholder='单个字段,如 {"think": false}' onChange={(e) => setCustom(e.target.value)} onBlur={() => saveExtra("custom", custom)} spellCheck={false} />
+            <input className="field mono flex-1" value={custom} placeholder='如 {"reasoning_effort": "none"}' onChange={(e) => setCustom(e.target.value)} onBlur={() => saveExtra(tmode, "custom", custom)} spellCheck={false} />
           </div>
         )}
       </div>
       <div className="gf selectable">
-        {thinking === "auto" ? autoThinkingNote(p.kind, base) : thinking === "none" ? "不注入任何关思考字段。" : "请求体会附加所选字段;服务商不认时自动去掉重试一次。"}
+        {preview
+          ? <>请求体附加 <span className="font-code text-t2">{preview}</span>{tmode === "auto" ? "(已知服务商自动关闭思考)" : ""};服务商不认时自动降级或去掉重试。</>
+          : tmode === "default" ? "不附加思考字段,由模型自己决定是否思考。"
+          : tmode === "auto" ? "自动:此地址不在已知服务商列表,不附加字段。要关闭思考请选「关闭」。"
+          : "此格式不支持该设置,不附加字段。"}
         <br />请求 <span className="font-code">POST {requestUrl(p.kind, base)}</span>
         {models.length > 0 && <> · 已拉取 {models.length} 个模型</>}
       </div>

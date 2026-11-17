@@ -12,31 +12,37 @@ export const PRESETS: Record<string, Preset> = {
   "Ollama(本地)": { kind: "ollama", base_url: "http://localhost:11434", model: "qwen3:4b", hint: "localhost:11434 · 免密钥" },
 };
 
-/** 思考控制(§2.3.9):auto = 按 host 自动(DeepSeek / 智谱 / 百炼 / OpenAI 推理模型 / Ollama 自动关) */
-export const THINKING_OPTIONS = [
-  ["auto", "自动(按服务商)"],
-  ["none", "不注入"],
-  ["deepseek", "DeepSeek 式 · thinking: disabled"],
-  ["qwen", "Qwen 式 · enable_thinking: false"],
-  ["openai", "OpenAI 式 · reasoning_effort: none"],
-  ["ollama", "Ollama 式 · think: false"],
+/** 思考级别(§2.3.9):auto = 已知服务商自动关闭、其他不干预;default = 不附加任何字段(模型默认) */
+export const THINKING_MODES = [
+  ["auto", "自动"], ["off", "关闭"], ["low", "低"], ["medium", "中"], ["high", "高"], ["default", "默认"],
+] as const;
+export type ThinkingMode = (typeof THINKING_MODES)[number][0];
+
+/** 字段格式:auto = 按地址识别(未知地址用 OpenAI 式 reasoning_effort) */
+export const THINKING_FORMATS = [
+  ["auto", "自动识别"],
+  ["openai", "OpenAI 式 · reasoning_effort"],
+  ["deepseek", "DeepSeek / 智谱式 · thinking.type(只有开关)"],
+  ["qwen", "Qwen 式 · enable_thinking + thinking_budget"],
+  ["ollama", "Ollama 式 · think"],
   ["custom", "自定义 JSON…"],
 ] as const;
 
-export type Extra = { thinking_control?: string; thinking_custom?: string; thinking_unsupported?: boolean; [k: string]: unknown };
+/** 读 extra 里的思考设置(兼容旧版 thinking_control 单选) */
+export function thinkingOf(ex: Extra): { mode: ThinkingMode; format: string } {
+  const legacy = ex.thinking_control;
+  const lmode = legacy === "none" ? "default" : legacy && legacy !== "auto" ? "off" : undefined;
+  const lformat = legacy && !["none", "auto"].includes(legacy) ? legacy : undefined;
+  return {
+    mode: ((ex.thinking_mode as ThinkingMode) ?? lmode ?? "auto") as ThinkingMode,
+    format: (ex.thinking_format as string) ?? lformat ?? "auto",
+  };
+}
+
+export type Extra = { thinking_mode?: string; thinking_format?: string; thinking_control?: string; thinking_custom?: string; thinking_unsupported?: boolean; [k: string]: unknown };
 
 export function parseExtra(p: Provider | null | undefined): Extra {
   try { return JSON.parse(p?.extra || "{}") ?? {}; } catch { return {}; }
-}
-
-/** 预设 host 是否自动关思考(用于「自动」档的说明文字) */
-export function autoThinkingNote(kind: string, base_url: string): string {
-  if (kind === "ollama") return "自动:请求带 think: false";
-  const h = base_url.toLowerCase();
-  if (/deepseek\.com|bigmodel\.cn|z\.ai/.test(h)) return "自动:请求带 thinking: disabled";
-  if (/dashscope/.test(h)) return "自动:请求带 enable_thinking: false";
-  if (/openai\.com/.test(h)) return "自动:推理模型带 reasoning_effort: none";
-  return "自动:此地址不在已知列表,不注入任何字段;若首字很慢,试试下面的具体方式";
 }
 
 export function formOf(p: Provider, over: Partial<ProviderForm> = {}): ProviderForm {

@@ -129,11 +129,16 @@ pub async fn send_stream_with_thinking(
     stats: &mut StreamStats,
 ) -> Result<reqwest::Response> {
     let mut param = thinking_param;
-    if let Some((field, value)) = &param {
-        body[field.as_str()] = value.clone();
-    }
-    // 最多 3 次:原值 → 降级值 → 去字段
-    for _ in 0..3 {
+    let apply = |body: &mut serde_json::Value, p: &Option<thinking::ThinkingParam>| {
+        if let (Some(obj), Some(p)) = (body.as_object_mut(), p) {
+            for (k, v) in p {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    };
+    apply(&mut body, &param);
+    // 最多 4 次:原值 → 降级(none→minimal→low)→ 去字段
+    for _ in 0..4 {
         let mut req = shared_client()
             .post(url)
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
@@ -148,19 +153,21 @@ pub async fn send_stream_with_thinking(
             return Ok(resp);
         }
         let text = resp.text().await.unwrap_or_default();
-        let Some((field, value)) = param.clone() else {
+        let Some(cur) = param.clone() else {
             return Err(anyhow!("HTTP {status}: {text}"));
         };
-        if !thinking::error_mentions(&field, status.as_u16(), &text) {
+        if !thinking::error_mentions(&cur, status.as_u16(), &text) {
             return Err(anyhow!("HTTP {status}: {text}"));
         }
-        if let Some(fb) = thinking::fallback_value(&field, &value) {
-            body[field.as_str()] = fb.clone();
-            param = Some((field, fb));
+        if let Some(fb) = thinking::fallback(&cur) {
+            param = Some(fb);
+            apply(&mut body, &param);
             continue;
         }
         if let Some(obj) = body.as_object_mut() {
-            obj.remove(&field);
+            for k in cur.keys() {
+                obj.remove(k);
+            }
         }
         param = None;
         thinking::mark_unsupported(provider_id);

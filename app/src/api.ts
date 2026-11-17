@@ -77,6 +77,11 @@ export function providerKeyHint(id: number): Promise<string | null> {
   return invoke<string | null>("provider_key_hint", { id });
 }
 
+/** 当前思考设置实际附加到请求体的字段(JSON;空串 = 不附加) */
+export function thinkingPreview(form: ProviderForm): Promise<string> {
+  return invoke<string>("thinking_preview", { form });
+}
+
 export function getPrefs(): Promise<Prefs> {
   return invoke<Prefs>("get_prefs");
 }
