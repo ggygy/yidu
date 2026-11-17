@@ -1,0 +1,37 @@
+app/src-tauri/src/commands.rs
+  s_078392dfaaf413::t_e3a33bc78c834f 293,312,356,418-419
+app/src-tauri/src/prompt.rs
+  s_078392dfaaf413::t_e3a33bc78c834f 88-96
+  s_078392dfaaf413::t_11b697463362ab 193-200
+app/src-tauri/src/dict.rs
+  s_078392dfaaf413::t_68816159b9833c 219
+app/src-tauri/src/translate.rs
+  s_078392dfaaf413::t_e3a33bc78c834f 158-160,191,265-274,277-278,433-466,469-470,482,695-701
+app/src-tauri/src/providers/ollama.rs
+  s_078392dfaaf413::t_68816159b9833c 79,87
+app/src-tauri/src/providers/mod.rs
+  s_078392dfaaf413::t_68816159b9833c 68,72,208-216
+  s_078392dfaaf413::t_b660efb69e753e 256-267
+app/src-tauri/src/providers/openai.rs
+  s_078392dfaaf413::t_68816159b9833c 24,29,45,55,114
+app/src/types.ts
+  s_078392dfaaf413::t_c39c017839568c 117
+app/src/settings/main.tsx
+  s_078392dfaaf413::t_c39c017839568c 137-142,144-148,150-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "f102ef1b1d3494c4c27650970e8ee0e208d7d0eb",
+  "prompts": {},
+  "sessions": {
+    "s_078392dfaaf413": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c81f6b8-f1af-4ec5-ad4a-f54f2335a07d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
