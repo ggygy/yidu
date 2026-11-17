@@ -3,6 +3,8 @@
 import React, { useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { sanitizeHtml } from "./blocks";
+import type { BlockKind } from "./types";
 
 export type WordHandler = (w: string, x: number, y: number) => void;
 export type TermHit = { from: string; to: string };
@@ -83,7 +85,23 @@ function clickableComponents(onWord?: WordHandler, termHits?: TermHit[], onTerm?
     li: wrap("li"),
     td: wrap("td"),
     th: wrap("th"),
+    table: TableWrap,
   };
+}
+
+// 表格外包一层:窄宽横向滚动(§2.2.8)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function TableWrap(props: any) {
+  const { node: _node, ...rest } = props;
+  return <div className="tbl"><table {...rest} /></div>;
+}
+
+/** 直通块(不译):代码 / HTML(白名单清洗后按 html 渲染)/ 分隔线 / 脚注与链接定义 */
+export function PassBlock({ kind, src }: { kind: BlockKind; src: string }) {
+  if (kind === "code") return <CodeBox src={src} />;
+  if (kind === "html") return <div className="md html-block selectable" dangerouslySetInnerHTML={{ __html: sanitizeHtml(src) }} />;
+  if (kind === "hr") return <hr className="md-hr" />;
+  return <div className="selectable font-code text-[12px] leading-relaxed text-t3 whitespace-pre-wrap break-all">{src}</div>;
 }
 
 // 代码块展示:src 是 markdown 原文(含围栏),剥出正文与语言;右上复制按钮
@@ -116,6 +134,8 @@ export function CodeBox({ src }: { src: string }) {
 }
 
 // 通用 markdown 块渲染:onWord 存在时原文可点词;termHits+onTerm 存在时译文术语高亮
-export function Md({ text, onWord, termHits, onTerm }: { text: string; onWord?: WordHandler; termHits?: TermHit[]; onTerm?: TermHandler }) {
-  return <Markdown remarkPlugins={[remarkGfm]} components={clickableComponents(onWord, termHits, onTerm)}>{text}</Markdown>;
+export function Md({ text, onWord, termHits, onTerm, defs }: { text: string; onWord?: WordHandler; termHits?: TermHit[]; onTerm?: TermHandler; defs?: string }) {
+  // defs:文内引用式链接定义,附在末尾供解析(定义本身不渲染任何内容)
+  const src = defs ? `${text}\n\n${defs}` : text;
+  return <Markdown remarkPlugins={[remarkGfm]} components={clickableComponents(onWord, termHits, onTerm) as never}>{src}</Markdown>;
 }

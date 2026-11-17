@@ -4,7 +4,8 @@ import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit, listen } from "@tauri-apps/api/event";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { CodeBox, Md } from "../md";
+import { Md, PassBlock } from "../md";
+import { isPassthrough, linkDefs, toMarkdown, toUnits, type Unit } from "../blocks";
 import { Icon } from "../icons";
 import * as api from "../api";
 import { dirLabel, dirShort, detectDir } from "../languages";
@@ -29,6 +30,11 @@ function clipHash(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
   return String(h);
+}
+
+function useLocalFlagStr(key: string, init: string) {
+  const [v, setV] = useState(() => { try { return localStorage.getItem(key) ?? init; } catch { return init; } });
+  return [v, (n: string) => { try { localStorage.setItem(key, n); } catch { /* ignore */ } setV(n); }] as const;
 }
 
 function useLocalFlag(key: string, init: boolean) {
@@ -70,7 +76,9 @@ function QuickApp() {
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
   const active = providers.find((p) => p.is_active);
-  const outText = blocks.filter((b) => b.trans).map((b) => b.trans).join("\n\n");
+  // 复制 = 按原文分隔拼回的整篇 markdown(列表 / 引用 / 表格结构不散)
+  const outText = blocks.some((b) => b.trans && !isPassthrough(b.kind)) ? toMarkdown(blocks, "trans") : "";
+  const [fmt, setFmt] = useLocalFlagStr("q-format", "auto"); // 原文格式:自动 / Markdown / 纯文本(§2.2.5)
 
   // 写 prefs(Rust 侧广播 prefs-changed,主窗 / 设置窗同步)
   const savePrefs = (u: Partial<Prefs>) => api.setPrefs(u).then((p) => { setPrefs(p); setDirection(p.direction); return p; });
@@ -141,7 +149,7 @@ function QuickApp() {
     } else if (e.type === "usage") {
       setUsage((u) => addUsage(u, e));
     } else if (e.type === "block") {
-      setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "done" } : b)));
+      setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "done", format_warn: e.format_warn } : b)));
     } else if (e.type === "partial") {
       setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "streaming" } : b)));
     } else if (e.type === "error") {
@@ -166,7 +174,7 @@ function QuickApp() {
     setLastSrc(text);
     const effDir = direction === "auto" ? detectDir(text) : direction;
     try {
-      sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste" }, onEvent);
+      sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste", format: fmt as "auto" | "md" | "plain" }, onEvent);
     } catch (e) {
       setPhase("idle");
       setLive(IDLE);
@@ -333,13 +341,19 @@ function QuickApp() {
   }, []);
 
   // 单块渲染:译文 / 原文 / 对照(窄宽对照 = 每块上原文下译文)
-  const zhOf = (b: Block) =>
-    b.trans ? (
-      <div className={"zh md" + (b.status === "streaming" ? " streaming" : "")}><Md text={b.trans} /></div>
-    ) : (
-      <p className="zh m-0 text-t3">{streaming ? <span className="caret" /> : "待译"}</p>
-    );
-  const enOf = (b: Block, extra = "") => <div className={"en md text-[length:var(--en-size)] leading-[var(--en-line)] " + extra}><Md text={b.src} /></div>;
+  const units = toUnits(blocks);
+  const defs = linkDefs(blocks);
+  const zhOf = (u: Unit) => (
+    <>
+      {u.translated ? (
+        <div className={"zh md" + (u.streaming ? " streaming" : "")}><Md text={u.trans} defs={defs} /></div>
+      ) : (
+        <p className="zh m-0 text-t3">{streaming ? <span className="caret" /> : "待译"}</p>
+      )}
+      {u.warn && <p className="m-0 mt-1 text-[11px] text-danger" title={u.warn}>格式可能有误(已自动重译一次)</p>}
+    </>
+  );
+  const enOf = (u: Unit, extra = "") => <div className={"en md text-[length:var(--en-size)] leading-[var(--en-line)] " + extra}><Md text={u.src} defs={defs} /></div>;
 
   return (
     <div className="relative flex flex-col h-screen overflow-hidden mat">
@@ -452,6 +466,13 @@ function QuickApp() {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); fire(); }
           }}
         />
+        <div className="flex items-center justify-end -mt-1">
+          <button
+            className="border-none bg-transparent text-[11px] text-t3 hover:text-t1 px-1"
+            title="原文格式:自动按 Markdown 语法密度判定;纯文本 = 保留单换行、行首 # > 1. 不当作 Markdown"
+            onClick={() => setFmt(fmt === "auto" ? "md" : fmt === "md" ? "plain" : "auto")}
+          >{fmt === "auto" ? "格式:自动" : fmt === "md" ? "格式:Markdown" : "格式:纯文本"}</button>
+        </div>
       </div>
       )}
 
@@ -471,17 +492,17 @@ function QuickApp() {
             {streaming ? <>连接中 <span className="caret" /></> : `译文将逐块流式显示,并自动存入文章库 · ${autoDir ? (input.trim() ? dirLabel(detectDir(input)) : "自动识别语言") : dirLabel(direction)}`}
           </p>
         )}
-        {blocks.map((b) =>
-          b.kind === "code" ? (
-            <CodeBox key={b.idx} src={b.src} />
+        {units.map((u) =>
+          isPassthrough(u.kind) ? (
+            <PassBlock key={u.key} kind={u.kind} src={u.src} />
           ) : view === "src" ? (
-            <div key={b.idx}>{enOf(b)}</div>
+            <div key={u.key}>{enOf(u)}</div>
           ) : view === "pair" ? (
             sideBySide
-              ? <div key={b.idx} className="grid grid-cols-2 gap-x-4 items-start">{enOf(b, "min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(b)}</div></div>
-              : <div key={b.idx} className="flex flex-col gap-1">{enOf(b)}{zhOf(b)}</div>
+              ? <div key={u.key} className="grid grid-cols-2 gap-x-4 items-start">{enOf(u, "min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(u)}</div></div>
+              : <div key={u.key} className="flex flex-col gap-1">{enOf(u)}{zhOf(u)}</div>
           ) : (
-            <div key={b.idx}>{zhOf(b)}</div>
+            <div key={u.key}>{zhOf(u)}</div>
           ),
         )}
        </div>

@@ -1,5 +1,5 @@
 // 与 Rust 侧 serde 结构一一对应(字段名 snake_case 保持一致)
-export type BlockKind = "heading" | "p" | "list" | "code" | "table";
+export type BlockKind = "heading" | "p" | "list" | "quote" | "code" | "table" | "html" | "hr" | "footnote" | "definition";
 export type BlockStatus = "pending" | "streaming" | "done" | "error";
 
 export interface Block {
@@ -9,6 +9,9 @@ export interface Block {
   trans: string;
   status: BlockStatus;
   terms?: string; // 命中术语 JSON [{"from","to"}]
+  group?: number | null; // 大列表拆项:同 group 合回一个列表渲染
+  sep?: string; // 与前一块之间的原文分隔(拼回 = 原结构)
+  format_warn?: string; // 结构签名不一致的说明;空 = 正常
 }
 
 export interface Article {
@@ -36,7 +39,7 @@ export interface Provider {
 
 export type StreamEvent =
   | { type: "created"; article_id: number; article: Article; blocks: Block[] }
-  | { type: "block"; idx: number; text: string; terms: string }
+  | { type: "block"; idx: number; text: string; terms: string; format_warn: string }
   | { type: "partial"; idx: number; text: string }
   | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number }
   | { type: "phase"; phase: Phase }

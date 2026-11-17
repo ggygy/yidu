@@ -102,6 +102,7 @@ pub fn build_with_key(row: &ProviderRow, key: Option<String>) -> Result<Box<dyn 
             api_key: key.unwrap_or_default(),
             thinking: thinking::param_for(row.id, &row.kind, &row.base_url, &row.model, &row.extra),
             provider_id: row.id,
+            temperature: temperature_of(&row.extra),
         })),
         "ollama" => Ok(Box::new(ollama::Ollama {
             base_url: row.base_url.clone(),
@@ -188,6 +189,18 @@ pub fn take_complete_utf8(buf: &mut Vec<u8>) -> String {
 }
 
 /// Base URL 归一化:去尾斜杠;已指到 chat/completions 则不重复拼接
+/// 翻译 temperature(§2.2.7):默认 0.3;extra.temperature(0–2)可覆盖
+pub const DEFAULT_TEMPERATURE: f64 = 0.3;
+
+pub fn temperature_of(extra: &str) -> f64 {
+    serde_json::from_str::<serde_json::Value>(extra)
+        .ok()
+        .and_then(|v| v.get("temperature").and_then(|t| t.as_f64()))
+        .filter(|t| t.is_finite())
+        .map(|t| t.clamp(0.0, 2.0))
+        .unwrap_or(DEFAULT_TEMPERATURE)
+}
+
 pub fn models_url(base_url: &str) -> String {
     let b = base_url.trim_end_matches('/');
     let b = b.strip_suffix("/chat/completions").unwrap_or(b);

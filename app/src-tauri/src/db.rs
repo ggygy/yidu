@@ -148,6 +148,15 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         )?;
         conn.pragma_update(None, "user_version", 4)?;
     }
+    if version < 5 {
+        // v5(v0.3 §2.2 块模型):大列表拆项的 group、与前块的原文分隔、结构签名不一致的提示
+        conn.execute_batch(
+            "ALTER TABLE blocks ADD COLUMN grp INTEGER;
+             ALTER TABLE blocks ADD COLUMN sep TEXT NOT NULL DEFAULT '';
+             ALTER TABLE blocks ADD COLUMN format_warn TEXT NOT NULL DEFAULT '';",
+        )?;
+        conn.pragma_update(None, "user_version", 5)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -174,6 +183,12 @@ pub struct BlockRow {
     pub trans: String,
     pub status: String,
     pub terms: String, // 命中术语 JSON [{"from","to"}]
+    /// 大列表拆项:同 group 渲染时合回一个列表
+    pub group: Option<i64>,
+    /// 与前一块之间的原文分隔(拼回 / 复制为 md 用)
+    pub sep: String,
+    /// 结构签名不一致(自动重译一次后仍不一致)的说明;空 = 正常
+    pub format_warn: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -249,7 +264,7 @@ impl Db {
         title: &str,
         kind: &str,
         direction: &str,
-        blocks: &[(String, String, String)], // (kind, src, hash)
+        blocks: &[crate::blocks::Block],
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let t = now();
@@ -259,12 +274,13 @@ impl Db {
             params![title, kind, direction, t],
         )?;
         let id = tx.last_insert_rowid();
-        for (i, (bk, src, hash)) in blocks.iter().enumerate() {
-            let (trans, status) = if bk == "code" { (src.as_str(), "done") } else { ("", "pending") };
+        for (i, b) in blocks.iter().enumerate() {
+            // 直通块(代码 / HTML / hr / 脚注 / 链接定义):建库即 done,译文 = 原文
+            let (trans, status) = if b.kind.translatable() { ("", "pending") } else { (b.src.as_str(), "done") };
             tx.execute(
-                "INSERT INTO blocks(article_id, idx, kind, src, hash, trans, trans_status, created_at, updated_at)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",
-                params![id, i as i64, bk, src, hash, trans, status, t],
+                "INSERT INTO blocks(article_id, idx, kind, src, hash, trans, trans_status, created_at, updated_at, grp, sep)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8,?9,?10)",
+                params![id, i as i64, b.kind.as_str(), b.src, b.hash, trans, status, t, b.group, b.sep],
             )?;
         }
         tx.commit()?;
@@ -322,7 +338,7 @@ impl Db {
             },
         )?;
         let mut stmt = conn.prepare(
-            "SELECT idx, kind, src, trans, trans_status, terms FROM blocks WHERE article_id=?1 ORDER BY idx",
+            "SELECT idx, kind, src, trans, trans_status, terms, grp, sep, format_warn FROM blocks WHERE article_id=?1 ORDER BY idx",
         )?;
         let blocks = stmt
             .query_map(params![id], |r| {
@@ -333,6 +349,9 @@ impl Db {
                     trans: r.get(3)?,
                     status: r.get(4)?,
                     terms: r.get(5)?,
+                    group: r.get(6)?,
+                    sep: r.get(7)?,
+                    format_warn: r.get(8)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -344,6 +363,26 @@ impl Db {
         conn.execute(
             "UPDATE blocks SET trans=?1, trans_status=?2, updated_at=?3 WHERE article_id=?4 AND idx=?5",
             params![trans, status, now(), article_id, idx as i64],
+        )?;
+        Ok(())
+    }
+
+    /// 结构签名提示(空串 = 清除)
+    pub fn update_block_warn(&self, article_id: i64, idx: usize, warn: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE blocks SET format_warn=?1, updated_at=?2 WHERE article_id=?3 AND idx=?4",
+            params![warn, now(), article_id, idx as i64],
+        )?;
+        Ok(())
+    }
+
+    /// 单块重译:清空译文与提示,回到待译(随后走续译)
+    pub fn reset_block(&self, article_id: i64, idx: usize) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE blocks SET trans='', trans_status='pending', format_warn='', terms='', updated_at=?1 WHERE article_id=?2 AND idx=?3",
+            params![now(), article_id, idx as i64],
         )?;
         Ok(())
     }
@@ -806,7 +845,7 @@ mod tests {
         {
             let conn = db.conn.lock().unwrap();
             let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 4);
+            assert_eq!(v, 5);
             let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
                 .query_row(
                     "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",

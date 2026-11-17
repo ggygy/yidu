@@ -17,13 +17,15 @@ pub struct OpenAiCompatible {
     /// 关思考注入字段(None = 不注入)
     pub thinking: Option<super::thinking::ThinkingParam>,
     pub provider_id: i64,
+    /// v0.3 §2.2.7:默认 0.3,服务商 extra.temperature 可覆盖
+    pub temperature: f64,
 }
 
-fn request_body(model: &str, system: &str, user: &str, stream: bool, max_tokens: Option<i64>) -> Value {
+fn request_body(model: &str, system: &str, user: &str, stream: bool, max_tokens: Option<i64>, temperature: f64) -> Value {
     let mut body = json!({
         "model": model,
         "stream": stream,
-        "temperature": 1.0,
+        "temperature": temperature,
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": user },
@@ -52,7 +54,7 @@ impl super::Provider for OpenAiCompatible {
         let resp = super::send_stream_with_thinking(
             &chat_url(&self.base_url),
             Some(&self.api_key),
-            request_body(&self.model, system, user, true, None),
+            request_body(&self.model, system, user, true, None, self.temperature),
             self.thinking.clone(),
             self.provider_id,
             &timing,
@@ -108,7 +110,7 @@ impl super::Provider for OpenAiCompatible {
         let resp = shared_client()
             .post(chat_url(&self.base_url))
             .bearer_auth(&self.api_key)
-            .json(&request_body(&self.model, "You are a connectivity test.", "hi", false, Some(1)))
+            .json(&request_body(&self.model, "You are a connectivity test.", "hi", false, Some(1), self.temperature))
             .send()
             .await?;
         let status = resp.status();

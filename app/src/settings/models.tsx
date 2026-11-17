@@ -147,6 +147,17 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
   const [tformat, setTformat] = useState(thinkingOf(extra).format);
   const [custom, setCustom] = useState(extra.thinking_custom ?? "");
   const [preview, setPreview] = useState<string | null>(null);
+  const [temp, setTemp] = useState(typeof extra.temperature === "number" ? String(extra.temperature) : "");
+  const saveTemp = async () => {
+    const v = parseFloat(temp);
+    const next = { ...parseExtra(p) };
+    if (temp.trim() === "" || isNaN(v)) { delete next.temperature; setTemp(""); }
+    else next.temperature = Math.min(2, Math.max(0, v));
+    try {
+      await api.providerSave({ id: p.id, name: p.name, kind: p.kind, base_url: p.base_url, model: p.model, extra: JSON.stringify(next) });
+      await refreshProviders();
+    } catch (e) { say(String(e)); }
+  };
   const [hint, setHint] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState(!p.has_key && p.kind !== "ollama");
   const [keyDraft, setKeyDraft] = useState("");
@@ -332,6 +343,11 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
             </select>
           </div>
         )}
+        <div className="gr">
+          <span className="w-[64px] flex-none">温度</span>
+          <input className="field w-[72px] text-right tabular-nums" inputMode="decimal" placeholder="0.3" value={temp} onChange={(e) => setTemp(e.target.value)} onBlur={saveTemp} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+          <span className="text-[11px] text-t3">留空 = 0.3(翻译求稳);0–2</span>
+        </div>
         {tmode !== "default" && tformat === "custom" && (
           <div className="gr">
             <span className="w-[64px] flex-none text-t3">字段</span>

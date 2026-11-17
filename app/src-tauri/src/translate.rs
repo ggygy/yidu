@@ -22,7 +22,8 @@ use tokio::sync::mpsc;
 pub enum StreamEvent {
     /// 带上 article 行:主窗直接据此建文档,不再重拉(v0.2 重拉期间早到的 block/partial 被丢)
     Created { article_id: i64, article: ArticleRow, blocks: Vec<BlockRow> },
-    Block { idx: usize, text: String, terms: String },
+    /// format_warn:结构签名不一致(自动重译一次后仍不一致)时的说明,空 = 正常
+    Block { idx: usize, text: String, terms: String, format_warn: String },
     Partial { idx: usize, text: String },
     Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
     /// 阶段(§2.6.5):conn 连接 / think 思考 / gen 生成
@@ -68,6 +69,9 @@ struct SessionMeter {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TranslateRequest {
+    /// "auto" | "md" | "plain"(§2.2.5;缺省 auto:按 md 语法密度判定)
+    #[serde(default)]
+    pub format: Option<String>,
     pub text: String,
     pub article_id: Option<i64>,
     pub direction: String,
@@ -78,16 +82,6 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub active: Arc<std::sync::atomic::AtomicU64>,
     pub counter: std::sync::atomic::AtomicU64,
-}
-
-fn kind_from_str(s: &str) -> BlockKind {
-    match s {
-        "heading" => BlockKind::Heading,
-        "list" => BlockKind::List,
-        "code" => BlockKind::Code,
-        "table" => BlockKind::Table,
-        _ => BlockKind::Paragraph,
-    }
 }
 
 pub async fn run(app: tauri::AppHandle, req: TranslateRequest, channel: Channel<StreamEvent>, session: u64) {
@@ -125,16 +119,19 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     let article_id = match req.article_id {
         Some(id) => id,
         None => {
-            let parsed = blocks::split_blocks(&req.text);
+            // 纯文本粘贴:段内单换行保留为硬换行、行首 md 记号转义(§2.2.5)
+            let plain = match req.format.as_deref() {
+                Some("plain") => true,
+                Some("md") => false,
+                _ => !blocks::looks_like_markdown(&req.text),
+            };
+            let text = if plain { blocks::plain_to_markdown(&req.text) } else { req.text.clone() };
+            let parsed = blocks::split_blocks(&text);
             if parsed.is_empty() {
                 return Err(anyhow!("没有可翻译的内容"));
             }
-            let title = blocks::derive_title(&req.text);
-            let rows: Vec<(String, String, String)> = parsed
-                .iter()
-                .map(|b| (b.kind.as_str().to_string(), b.src.clone(), b.hash.clone()))
-                .collect();
-            db.create_article_with_blocks(&title, &req.kind, &req.direction, &rows)?
+            let title = blocks::derive_title(&text);
+            db.create_article_with_blocks(&title, &req.kind, &req.direction, &parsed)?
         }
     };
     let (article, all_blocks) = db.get_article(article_id)?;
@@ -161,9 +158,11 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     let block_vec: Vec<Block> = all_blocks
         .iter()
         .map(|b| Block {
-            kind: kind_from_str(&b.kind),
+            kind: BlockKind::from_str(&b.kind),
             src: b.src.clone(),
             hash: String::new(),
+            sep: b.sep.clone(),
+            group: b.group,
         })
         .collect();
     let batches = batch::make_batches(&block_vec, &pending, &req.direction);
@@ -363,8 +362,18 @@ impl BatchCtx<'_> {
 
     /// 单次请求:流式上屏(partial 打字机 + 完成块即写库即推送),返回 (完整块, raw, 统计)
     async fn request(&self, items: &[(usize, String)], prev: &str) -> Result<(Vec<Tagged>, String, StreamStats)> {
+        self.request_with_note(items, prev, None).await
+    }
+
+    /// note:结构签名不一致时附在用户消息末尾的修正说明(§2.2.4 带差异说明重译)
+    async fn request_with_note(&self, items: &[(usize, String)], prev: &str, note: Option<&str>) -> Result<(Vec<Tagged>, String, StreamStats)> {
         let sources: Vec<&str> = items.iter().map(|(_, s)| s.as_str()).collect();
-        let user = prompt::user_msg(&self.title, if prev.is_empty() { None } else { Some(prev) }, &sources);
+        let mut user = prompt::user_msg(&self.title, if prev.is_empty() { None } else { Some(prev) }, &sources);
+        if let Some(n) = note {
+            user.push_str(&format!(
+                "\nYour previous translation of these segments broke the Markdown structure. Keep the structure identical to the source this time:\n{n}\n"
+            ));
+        }
         let provider = providers::build(&self.provider_row)?;
         let system = self.system.clone();
         let cancel = self.cancel.clone();
@@ -503,10 +512,52 @@ impl BatchCtx<'_> {
             }
         }
 
+        // 结构签名(§2.2.4):不一致 → 带差异说明自动重译这些块一次 → 仍不一致保留译文并标「格式可能有误」
+        let mut warns: std::collections::HashMap<u32, String> = Default::default();
+        if !self.cancelled() {
+            let src_of = |id: u32| items.get((id as usize).wrapping_sub(1)).map(|(_, s)| s.as_str());
+            let bad: Vec<(u32, Vec<String>)> = blocks
+                .iter()
+                .filter_map(|t| {
+                    let d = validate::structure_diff(src_of(t.id)?, &t.text);
+                    (!d.is_empty()).then_some((t.id, d))
+                })
+                .collect();
+            if !bad.is_empty() {
+                let sub: Vec<(usize, String)> = bad.iter().filter_map(|(id, _)| items.get((*id as usize).wrapping_sub(1)).cloned()).collect();
+                let note: String = bad
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (_, d))| format!("- segment {}: {}", k + 1, d.join("; ")))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let retry = self.request_with_note(&sub, prev, Some(&note)).await.ok().map(|(r, _, _)| r).unwrap_or_default();
+                for (k, (id, d0)) in bad.iter().enumerate() {
+                    let src = src_of(*id).unwrap_or("");
+                    match retry.iter().find(|r| r.id == k as u32 + 1) {
+                        Some(r) => {
+                            let d1 = validate::structure_diff(src, &r.text);
+                            if let Some(b) = blocks.iter_mut().find(|b| b.id == *id) {
+                                b.text = r.text.clone();
+                            }
+                            if !d1.is_empty() {
+                                warns.insert(*id, validate::diff_summary_zh(&d1));
+                            }
+                        }
+                        None => {
+                            warns.insert(*id, validate::diff_summary_zh(d0));
+                        }
+                    }
+                }
+            }
+        }
+
         // 终值落库 + 推送(流式期间已推过的按 idx 覆盖)
         let mut result = Vec::new();
         for t in &blocks {
             let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
+            let warn = warns.get(&t.id).cloned().unwrap_or_default();
+            let _ = self.db.update_block_warn(self.article_id, *gi, &warn);
             let (text, hits) = apply_terms(&t.text, &self.term_rules);
             let terms_json = if hits.is_empty() {
                 String::new()
@@ -517,7 +568,7 @@ impl BatchCtx<'_> {
             if !terms_json.is_empty() {
                 let _ = self.db.update_block_terms(self.article_id, *gi, &terms_json);
             }
-            let _ = self.channel.send(StreamEvent::Block { idx: *gi, text: text.clone(), terms: terms_json });
+            let _ = self.channel.send(StreamEvent::Block { idx: *gi, text: text.clone(), terms: terms_json, format_warn: warn });
             result.push((*gi, text));
         }
         // 梯度走完仍有缺失 → 报错但继续后面的批
@@ -590,6 +641,8 @@ fn process_payload(
     }
     raw.push_str(&d);
     for t in machine.feed(&d) {
+        // 协议转义还原(§2.2.6):发送前把源文里的 <s / </s / <t / </t 转成 &lt;…
+        let t = Tagged { id: t.id, text: prompt::unescape_protocol(&t.text) };
         let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
         if first_block_ms.is_none() {
             *first_block_ms = Some(t0.elapsed().as_millis() as i64);
@@ -609,12 +662,12 @@ fn process_payload(
         if !terms_json.is_empty() {
             let _ = ctx.db.update_block_terms(ctx.article_id, *gi, &terms_json);
         }
-        let _ = ctx.channel.send(StreamEvent::Block { idx: *gi, text, terms: terms_json });
+        let _ = ctx.channel.send(StreamEvent::Block { idx: *gi, text, terms: terms_json, format_warn: String::new() });
         out.push(Tagged { id: t.id, text: t.text.clone() });
     }
     if let Some((id, text)) = machine.partial() {
         if let Some((gi, _)) = items.get((id as usize).wrapping_sub(1)) {
-            let _ = ctx.channel.send(StreamEvent::Partial { idx: *gi, text });
+            let _ = ctx.channel.send(StreamEvent::Partial { idx: *gi, text: prompt::unescape_protocol(&text) });
         }
     }
 }

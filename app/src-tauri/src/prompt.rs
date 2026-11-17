@@ -79,10 +79,31 @@ pub fn user_msg(title: &str, prev: Option<&str>, blocks: &[&str]) -> String {
     }
     s.push_str(&format!("\nTranslate the following {} segments:\n\n", blocks.len()));
     for (i, b) in blocks.iter().enumerate() {
-        s.push_str(&format!("<s id=\"{}\">{}</s>\n", i + 1, b));
+        s.push_str(&format!("<s id=\"{}\">{}</s>\n", i + 1, escape_protocol(b)));
     }
     // 与实测脚本一致:片段间以换行连接,结尾无额外空行
     s
+}
+
+// ---------- 协议转义(§2.2.6) ----------
+// 源文里出现 `<s ` `</s>` `<t ` `</t>` 会打断 <s>/<t> 协议(状态机按 </t> 切块)→ 发送前转成 &lt;…,回收后还原
+
+fn proto_tag_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"<(/?[st])([\s>])").unwrap())
+}
+
+fn proto_esc_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"&lt;(/?[st])([\s>])").unwrap())
+}
+
+pub fn escape_protocol(s: &str) -> String {
+    proto_tag_re().replace_all(s, "&lt;$1$2").into_owned()
+}
+
+pub fn unescape_protocol(s: &str) -> String {
+    proto_esc_re().replace_all(s, "<$1$2").into_owned()
 }
 
 #[cfg(test)]
@@ -147,5 +168,17 @@ mod tests {
         assert!(u.starts_with("Document title: Test (context only)\n"));
         assert!(u.contains("\nReference context (do NOT translate or output):\nprev text\n"));
         assert!(u.contains("\nTranslate the following 2 segments:\n\n<s id=\"1\">a</s>\n<s id=\"2\">b</s>\n"));
+    }
+
+    #[test]
+    fn protocol_escape_roundtrip() {
+        let raw = "Close the tag with </t> and open with <s id=\"1\"> in XML examples.";
+        let esc = escape_protocol(raw);
+        assert!(!esc.contains("</t>") && !esc.contains("<s "));
+        assert_eq!(unescape_protocol(&esc), raw);
+        // 无关标签不动
+        assert_eq!(escape_protocol("<span> <table> <th>"), "<span> <table> <th>");
+        let msg = user_msg("T", None, &[raw]);
+        assert_eq!(msg.matches("</s>").count(), 1, "只剩协议自己的 </s>");
     }
 }

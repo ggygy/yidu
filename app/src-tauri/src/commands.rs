@@ -595,3 +595,9 @@ pub fn thinking_preview(form: ProviderForm) -> String {
         .map(|m| serde_json::Value::Object(m).to_string())
         .unwrap_or_default()
 }
+
+/// 单块重译(「格式可能有误」一键重译):清空该块译文回到待译,前端随后发起续译
+#[tauri::command]
+pub fn reset_block(state: State<AppState>, article_id: i64, idx: usize) -> Result<(), String> {
+    state.db.reset_block(article_id, idx).map_err(err)
+}

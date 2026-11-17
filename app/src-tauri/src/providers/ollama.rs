@@ -87,7 +87,7 @@ impl super::Provider for Ollama {
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },
             ],
-            "options": { "num_ctx": num_ctx(&self.extra) },
+            "options": { "num_ctx": num_ctx(&self.extra), "temperature": super::temperature_of(&self.extra) },
         });
         let timing = Timing::start();
         let mut stats = StreamStats::default();
