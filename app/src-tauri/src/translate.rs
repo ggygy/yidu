@@ -324,6 +324,19 @@ impl BatchCtx<'_> {
         (self.cancel)()
     }
 
+    /// 有正文但解析出的块比预期少:把原始输出打到终端并存 app_state(诊断协议不符)
+    fn log_unparsed(&self, out: &[Tagged], raw: &str, expected: usize) {
+        if out.len() >= expected || raw.trim().is_empty() {
+            return;
+        }
+        if expected == 1 && out.len() == 1 {
+            return;
+        }
+        let head: String = raw.chars().take(1200).collect();
+        eprintln!("[译读] 期望 {expected} 块,只解析出 {} 块。原始输出开头:\n{head}\n[译读] ---- 原始输出结束 ----", out.len());
+        let _ = self.db.set_state("debug_last_unparsed", raw);
+    }
+
     /// 一次 HTTP 请求结束:写 usage_log(含计时埋点)并推 usage 事件
     fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>) {
         if stats.thinking_unsupported {
@@ -406,6 +419,8 @@ impl BatchCtx<'_> {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
                     self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
+                    self.log_unparsed(&out, &raw, items.len());
+                    let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Ok(stats)) => {
@@ -414,6 +429,8 @@ impl BatchCtx<'_> {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
                     self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
+                    self.log_unparsed(&out, &raw, items.len());
+                    let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Err(e)) => return Err(e),
@@ -442,6 +459,22 @@ impl BatchCtx<'_> {
             let mut all = self.translate_batch(&items[..mid], prev, depth + 1).await?;
             all.extend(self.translate_batch(&items[mid..], prev, depth + 1).await?);
             return Ok(all);
+        }
+
+        // 多块请求一块都没解析出来(模型换了输出格式):重发整批多半同样失败 → 直接逐块单发
+        if blocks.is_empty() && items.len() > 1 && !raw.trim().is_empty() && !self.cancelled() {
+            eprintln!("[译读] {} 块的批次一块都没解析出,改为逐块单发", items.len());
+            for (k, item) in items.iter().enumerate() {
+                if self.cancelled() {
+                    break;
+                }
+                if let Ok((single, _, _)) = self.request(std::slice::from_ref(item), prev).await {
+                    if let Some(t) = single.into_iter().next() {
+                        blocks.push(Tagged { id: k as u32 + 1, text: t.text });
+                    }
+                }
+            }
+            raw = blocks.iter().map(|b| format!("<t id=\"{}\">{}</t>", b.id, b.text)).collect();
         }
 
         let sources: Vec<&str> = items.iter().map(|(_, s)| s.as_str()).collect();
@@ -476,9 +509,11 @@ impl BatchCtx<'_> {
                     .collect();
                 if !sub.is_empty() {
                     if let Ok((extra, _, _)) = self.request(&sub, prev).await {
+                        // 子请求里重新编号 1..n:映射回本批 id(v0.2 起此处误用子请求 id)
                         for t in extra {
-                            if !blocks.iter().any(|b| b.id == t.id) {
-                                blocks.push(t);
+                            let Some(&id) = missing.get((t.id as usize).wrapping_sub(1)) else { continue };
+                            if !blocks.iter().any(|b| b.id == id) {
+                                blocks.push(Tagged { id, text: t.text });
                             }
                         }
                         blocks.sort_by_key(|b| b.id);
@@ -503,7 +538,7 @@ impl BatchCtx<'_> {
                     let Some(item) = items.get((id as usize).wrapping_sub(1)) else { continue };
                     if let Ok((single, _, _)) = self.request(std::slice::from_ref(item), prev).await {
                         if let Some(t) = single.into_iter().next() {
-                            blocks.push(t);
+                            blocks.push(Tagged { id, text: t.text }); // 单发请求 id 恒为 1,映射回本批 id
                         }
                     }
                 }
@@ -574,13 +609,28 @@ impl BatchCtx<'_> {
         // 梯度走完仍有缺失 → 报错但继续后面的批
         let done_ids: std::collections::HashSet<u32> = blocks.iter().map(|b| b.id).collect();
         let still_missing: Vec<u32> = expected.iter().copied().filter(|id| !done_ids.contains(id)).collect();
-        if !still_missing.is_empty() {
+        if !still_missing.is_empty() && !self.cancelled() {
             let _ = self.channel.send(StreamEvent::Error {
                 message: format!("本批 {} 块经修复仍未完成,已保留待译状态", still_missing.len()),
             });
         }
         Ok(result)
     }
+}
+
+/// 单块请求但回复里没有任何标签:整段回复(去掉零散标签)就是译文;补成标准 raw 以过校验
+fn single_fallback(out: Vec<Tagged>, raw: String, expected: usize) -> (Vec<Tagged>, String) {
+    if expected != 1 || !out.is_empty() || raw.trim().is_empty() {
+        return (out, raw);
+    }
+    static TAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let tag = TAG.get_or_init(|| regex::Regex::new(r#"<\s*/?\s*[ts](\s+id\s*=[^>]*)?\s*>"#).unwrap());
+    let text = prompt::unescape_protocol(tag.replace_all(&raw, "").trim());
+    if text.is_empty() {
+        return (out, raw);
+    }
+    let fixed = format!("<t id=\"1\">{text}</t>");
+    (vec![Tagged { id: 1, text }], fixed)
 }
 
 fn process_payload(
