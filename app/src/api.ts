@@ -1,6 +1,6 @@
 // Tauri command 封装:全部走 Rust,流式经 Channel
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Article, Block, Prefs, Provider, StreamEvent, TestResult, UsageSummary } from "./types";
+import type { Article, Block, HotkeyStatus, Prefs, Provider, StreamEvent, TestResult, UsageSummary } from "./types";
 
 export function listArticles(query = ""): Promise<Article[]> {
   return invoke<Article[]>("list_articles", { query });
@@ -67,6 +67,10 @@ export function getPrefs(): Promise<Prefs> {
 
 export function setPrefs(update: Partial<Prefs>): Promise<Prefs> {
   return invoke<Prefs>("set_prefs", { update });
+}
+
+export function hotkeyStatus(): Promise<HotkeyStatus> {
+  return invoke<HotkeyStatus>("hotkey_status");
 }
 
 export function usageSummary(): Promise<UsageSummary> {

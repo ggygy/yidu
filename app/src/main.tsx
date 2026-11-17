@@ -10,7 +10,8 @@ import * as api from "./api";
 import { dirLabel, langZh, splitDir, detectDir } from "./languages";
 import { DirPicker } from "./dirselect";
 import { applyReaderStyle, loadReaderStyle, RS_ACCENTS, RS_DEFAULT, type ReaderStyle } from "./reader";
-import type { Article, Block, DictCard, GlossaryItem, Prefs, Provider, StreamEvent, UsageSummary, VocabEntry } from "./types";
+import { addUsage, EMPTY_USAGE } from "./types";
+import type { Article, Block, DictCard, GlossaryItem, HotkeyStatus, Prefs, Provider, SessionUsage, StreamEvent, UsageSummary, VocabEntry } from "./types";
 import "./styles.css";
 
 type View = "interleave" | "split" | "zh" | "pure";
@@ -104,7 +105,7 @@ function VocabCard({
   const left = Math.min(x, window.innerWidth - 320);
   const top = Math.min(y + 14, window.innerHeight - 300);
   return (
-    <div className="fixed w-[300px] bg-surface border border-line rounded-2xl shadow-[var(--shadow-card)] p-4 z-[60]" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed w-[300px] bg-surface border border-line rounded-2xl shadow-[var(--shadow-card)] p-4 z-[60]" style={{ left: Math.max(8, left), top: Math.max(8, top) }} onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-2">
         <b className="text-base font-semibold">{word}</b>
         <span className="text-[11px] text-t3">{card?.phonetic_us ? `/${card.phonetic_us}/` : card?.phonetic_uk ? `/${card.phonetic_uk}/` : ""}</span>
@@ -254,6 +255,12 @@ function SettingsPanel({
   const [updBusy, setUpdBusy] = useState(false);
   const [updMsg, setUpdMsg] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false); // v4:行内录制快捷键(替代 window.prompt)
+  const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null); // Rust 侧注册状态:失败时该行标红
+  useEffect(() => {
+    api.hotkeyStatus().then(setHotkey).catch(() => {});
+    const un = listen<HotkeyStatus>("hotkey-status", (e) => setHotkey(e.payload));
+    return () => { un.then((f) => f()); };
+  }, []);
   const [promptDraft, setPromptDraft] = useState(""); // 翻译提示词草稿,失焦保存
   const [addingCustom, setAddingCustom] = useState(false); // 自定义 provider 表单
   const [cName, setCName] = useState("");
@@ -519,10 +526,13 @@ function SettingsPanel({
         <div className="flex flex-col gap-2 shrink-0">
           <span className="text-[10.5px] font-semibold tracking-[1px] text-t3">快捷键与浮窗</span>
           <div className="flex flex-col gap-1.5">
-            <div className={ROW}><span className={ROW_NAME}>呼出快捷窗</span>
+            <div className={ROW} style={hotkey?.error ? { boxShadow: "inset 0 0 0 1px #d25a5a" } : undefined}>
+              <span className={ROW_NAME + (hotkey?.error ? " !text-[#d25a5a]" : "")} title={hotkey?.error ?? undefined}>
+                {hotkey?.error ? "呼出快捷窗 · 注册失败(被占用?)" : "呼出快捷窗"}
+              </span>
               <span className={ROW_VAL}>
                 <kbd>{(prefs?.hotkey ?? "Alt+T").replace("Alt", "⌥").replace("CommandOrControl", "⌘").replace("Shift", "⇧")}</kbd>
-                <button className="text-[10.5px] text-t2 cursor-pointer border-none bg-none px-1" onClick={() => setCapturing(true)}>
+                <button className="text-[10.5px] text-t2 cursor-pointer border-none bg-none px-1 whitespace-nowrap flex-none" onClick={() => setCapturing(true)}>
                   {capturing ? "按下组合键…(Esc 取消)" : "改键"}
                 </button>
               </span>
@@ -650,7 +660,7 @@ function VocabPanel({ onClose, onCount, say }: { onClose: () => void; onCount: (
   const refresh = () => api.vocabList().then((v) => { setItems(v); onCount(v.length); }).catch(() => {});
   useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <SidePanel title="生词本" count={items.length} onClose={onClose} foot={<span className="flex-1 flex items-center gap-2 h-9 text-[12.5px] text-t2 px-2.5">P1 将内置 SRS 复习</span>}>
+    <SidePanel title="生词本" count={items.length} onClose={onClose} foot={<span className="flex-1 flex items-center gap-2 h-9 text-[12.5px] text-t2 px-2.5">点原文单词即可收藏</span>}>
       <div className="flex-1 overflow-y-auto flex flex-col gap-0.5">
         {items.map((v) => (
           <div
@@ -771,6 +781,7 @@ function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number>(0);
   const markBusy = (v: boolean) => { busyRef.current = v; setBusy(v); };
+  const [sessUsage, setSessUsage] = useState<SessionUsage>(EMPTY_USAGE); // 本次翻译会话累计 token(usage 事件)
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "";
@@ -793,6 +804,8 @@ function App() {
     // 启动静默检查更新:有新版仅 toast 提示,不自动安装(在设置面板操作)
     checkUpdateFn().then((u) => { if (u) say(`发现新版本 v${u.version} · ⌘, 打开设置更新`); }).catch(() => {});
     api.glossaryList().then((g) => { setGlossaryCount(g.length); setGlossary(g); }).catch(() => {});
+    // 热键注册失败必须可见(托盘另有「!」与改键入口)
+    api.hotkeyStatus().then((h) => { if (h.error) say(`热键注册失败(可能被占用)· ⌘, 改键`); }).catch(() => {});
   }, []);
 
   // 首启引导:无任何 provider 时自动打开设置
@@ -876,26 +889,30 @@ function App() {
     } catch (e) { say(String(e)); }
   };
 
-  const lastArticleIdRef = useRef(-1);
-  useEffect(() => {
-    if (doc) lastArticleIdRef.current = doc.article.id;
-  }, [doc?.article.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 当前流式会话的文章 id:created 到达时同步写入(不经 effect 延迟),紧随其后的 block/partial 才不会被丢;
+  // 只把事件打到该文章上(流式中切去别的文章不串块)
+  const streamArticleRef = useRef(-1);
 
   const onStreamEvent = (e: StreamEvent) => {
     if (e.type === "created") {
-      api.getArticle(e.article_id).then(setDoc).catch(() => {});
+      // 直接用事件携带的 article + blocks 建文档(v0.2 重拉文章期间早到的 block/partial 全丢,短文一次性出现)
+      streamArticleRef.current = e.article_id;
+      setDoc({ article: e.article, blocks: e.blocks });
+      setExpanded(new Set());
       refreshLib();
+    } else if (e.type === "usage") {
+      setSessUsage((u) => addUsage(u, e));
     } else if (e.type === "block") {
       const { idx, text, terms } = e;
       setDoc((d) =>
-        d && d.article.id === lastArticleIdRef.current
+        d && d.article.id === streamArticleRef.current
           ? { ...d, blocks: d.blocks.map((b) => (b.idx === idx ? { ...b, trans: text, status: "done", terms } : b)) }
           : d,
       );
     } else if (e.type === "partial") {
       const { idx, text } = e;
       setDoc((d) =>
-        d && d.article.id === lastArticleIdRef.current
+        d && d.article.id === streamArticleRef.current
           ? { ...d, blocks: d.blocks.map((b) => (b.idx === idx ? { ...b, trans: text, status: "streaming" } : b)) }
           : d,
       );
@@ -917,6 +934,7 @@ function App() {
     // auto = 识别后解析成具体方向再发(Rust 侧只见 en2zh 形式)
     const effDir = direction === "auto" ? detectDir(draft) : direction;
     try {
+      setSessUsage(EMPTY_USAGE);
       const s = await api.translate({ text: draft, direction: effDir, kind: "md" }, onStreamEvent);
       sessionRef.current = s;
       setDraft("");
@@ -932,6 +950,7 @@ function App() {
     if (!pending.length) { say("本文已全部译完"); return; }
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} } // 顶替旧会话,防其迟到 Error 误伤
     try {
+      setSessUsage(EMPTY_USAGE);
       const s = await api.translate({ text: "", article_id: doc.article.id, direction: doc.article.direction, kind: "resume" }, onStreamEvent);
       sessionRef.current = s;
       setStreamErr(null);
@@ -1167,7 +1186,7 @@ function App() {
             <button
               key={v}
               title={{ interleave: "双语对照", split: "分栏", zh: "纯译文", pure: "纯净模式(自由复制)" }[v]}
-              className={"flex items-center gap-1.5 h-[38px] px-2.5 rounded-[10px] cursor-pointer border-none " + (view === v ? "bg-accentsoft text-accent" : "bg-none text-t3 hover:bg-surface2 hover:text-t1")}
+              className={"flex items-center gap-1.5 h-[38px] px-2.5 rounded-[10px] cursor-pointer border-none whitespace-nowrap flex-none " + (view === v ? "bg-accentsoft text-accent" : "bg-none text-t3 hover:bg-surface2 hover:text-t1")}
               onClick={() => setView(v)}
             >
               <Icon n={icon} size={15} />
@@ -1176,19 +1195,27 @@ function App() {
           ))}
         </div>
         <i className="w-px h-5 bg-line mx-[5px]" />
-        <button className="flex items-center gap-1.5 h-[38px] rounded-[10px] text-t2 text-[12.5px] px-2.5 cursor-pointer border-none hover:bg-surface2" onClick={() => setPanel("glossary")} title="术语库管理">
+        <button className="flex items-center gap-1.5 h-[38px] rounded-[10px] text-t2 text-[12.5px] px-2.5 cursor-pointer border-none hover:bg-surface2 whitespace-nowrap flex-none" onClick={() => setPanel("glossary")} title="术语库管理">
           <Icon n="tag" size={15} /><span>术语</span><b className="text-accent font-semibold text-xs">{glossaryCount}</b>
         </button>
-        <button className="flex items-center gap-1.5 h-[38px] rounded-[10px] text-t2 text-[12.5px] px-2.5 cursor-pointer border-none hover:bg-surface2" onClick={() => setPanel("vocab")} title="生词本">
+        <button className="flex items-center gap-1.5 h-[38px] rounded-[10px] text-t2 text-[12.5px] px-2.5 cursor-pointer border-none hover:bg-surface2 whitespace-nowrap flex-none" onClick={() => setPanel("vocab")} title="生词本">
           <Icon n="bookmark" size={15} /><span>生词</span><b className="text-accent font-semibold text-xs">{vocabCount}</b>
         </button>
         <i className="w-px h-5 bg-line mx-[5px]" />
-        <button className="flex items-center gap-[7px] h-[34px] bg-surface2 rounded-[9px] px-2.5 font-code text-[11px] text-t2 cursor-pointer border-none hover:text-t1 max-w-[170px]" onClick={() => setSetOpen(true)}>
+        <button className="flex items-center gap-[7px] h-[34px] bg-surface2 rounded-[9px] px-2.5 font-code text-[11px] text-t2 cursor-pointer border-none hover:text-t1 max-w-[170px] whitespace-nowrap flex-none" onClick={() => setSetOpen(true)}>
           <i className="w-1.5 h-1.5 rounded-full bg-ok shrink-0" /><span className="truncate">{activeProvider ? activeProvider.model : "未配置"}</span><Icon n="chev" size={12} />
         </button>
+        {sessUsage.requests > 0 && (
+          <span
+            className="flex-none whitespace-nowrap font-code text-[11px] text-t3 px-1"
+            title={`本次翻译 ${sessUsage.requests} 次请求 · 输入 ${sessUsage.prompt_tokens} · 输出 ${sessUsage.completion_tokens}${sessUsage.reasoning_tokens ? `(含思考 ${sessUsage.reasoning_tokens})` : ""} tokens`}
+          >
+            {fmtTokens(sessUsage.prompt_tokens)}↑ {fmtTokens(sessUsage.completion_tokens)}↓
+          </span>
+        )}
         {/* v4:续译/取消状态化 —— busy=spinner 点击取消;pending=数字徽章 */}
         <button
-          className="relative w-[34px] h-[34px] border-none bg-none rounded-[9px] text-t3 cursor-pointer flex items-center justify-center hover:bg-surface2 hover:text-t1"
+          className="relative flex-none w-[34px] h-[34px] border-none bg-none rounded-[9px] text-t3 cursor-pointer flex items-center justify-center hover:bg-surface2 hover:text-t1"
           title={busy ? "取消翻译(Esc)" : pendingCount > 0 ? `续译 ${pendingCount} 块(⌘R)` : "重新翻译(⌘R)"}
           onClick={busy ? cancelCurrent : resumeOrDone}
         >

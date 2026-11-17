@@ -19,13 +19,6 @@
   font-display: swap;
   src: url("./assets/fonts/jetbrainsmono-latin.woff2") format("woff2");
 }
-@font-face {
-  font-family: "Source Serif 4";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("./assets/fonts/sourceserif4-600-latin.woff2") format("woff2");
-}
 
 /* ============ 运行时令牌(亮/暗 + 阅读外观即时注入,变量名不变) ============ */
 :root {
@@ -46,7 +39,8 @@
   --shadow-card: 0 12px 32px rgba(16, 19, 34, 0.14);
   --shadow-capsule: 0 8px 24px rgba(16, 19, 34, 0.12);
   --f-ui: "Inter", -apple-system, "Noto Sans SC", "PingFang SC", sans-serif;
-  --f-title: "Source Serif 4", Georgia, "Noto Serif SC", "Songti SC", serif;
+  /* v0.3:删除打包的 Source Serif 4(仅 600 字重,正文成「标题体」);标题与译文改系统无衬线 */
+  --f-title: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
   --f-mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
 }
 [data-theme="dark"] {
@@ -116,6 +110,7 @@
     font-size: var(--zh-size, 16px);
     line-height: var(--zh-line, 1.8);
     font-family: var(--zh-font, var(--f-title));
+    font-weight: 500;
     color: var(--reader-t1, var(--t1));
   }
   .zh.streaming { opacity: 0.55; }

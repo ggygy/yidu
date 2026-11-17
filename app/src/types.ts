@@ -35,12 +35,37 @@ export interface Provider {
 }
 
 export type StreamEvent =
-  | { type: "created"; article_id: number; blocks: Block[] }
+  | { type: "created"; article_id: number; article: Article; blocks: Block[] }
   | { type: "block"; idx: number; text: string; terms: string }
   | { type: "partial"; idx: number; text: string }
-  | { type: "usage"; prompt_tokens: number; completion_tokens: number }
+  | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number }
   | { type: "done"; article_id: number }
   | { type: "error"; message: string };
+
+/** 本次翻译会话累计用量(usage 事件按请求逐次累加) */
+export interface SessionUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  reasoning_tokens: number;
+  requests: number;
+}
+
+export const EMPTY_USAGE: SessionUsage = { prompt_tokens: 0, completion_tokens: 0, reasoning_tokens: 0, requests: 0 };
+
+export function addUsage(u: SessionUsage, e: { prompt_tokens: number; completion_tokens: number; reasoning_tokens?: number }): SessionUsage {
+  return {
+    prompt_tokens: u.prompt_tokens + e.prompt_tokens,
+    completion_tokens: u.completion_tokens + e.completion_tokens,
+    reasoning_tokens: u.reasoning_tokens + (e.reasoning_tokens ?? 0),
+    requests: u.requests + 1,
+  };
+}
+
+/** Rust 侧热键注册状态(error 非空 = 注册失败,多半被其他应用占用) */
+export interface HotkeyStatus {
+  accel: string;
+  error: string | null;
+}
 
 export interface UsageSummary {
   requests: number;

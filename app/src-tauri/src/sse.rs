@@ -5,8 +5,11 @@
 #[derive(Debug, PartialEq)]
 pub enum SsePayload {
     Delta(String),
-    Usage { prompt_tokens: i64, completion_tokens: i64 },
-    /// choices[0].finish_reason(setstop/length 等,随最后一个内容 chunk 到达)
+    /// 思考文本(`delta.reasoning_content` / `delta.reasoning` / Ollama `message.thinking`):
+    /// 绝不进 `</t>` 状态机与译文;M1 仅用于计时埋点(首 reasoning)
+    Reasoning(String),
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
+    /// choices[0].finish_reason(stop/length 等,随最后一个内容 chunk 到达)
     Finish(String),
     Done,
 }
@@ -28,47 +31,56 @@ impl SseParser {
         while let Some(pos) = self.buf.find('\n') {
             let line: String = self.buf.drain(..=pos).collect();
             let line = line.trim_end_matches('\n');
-            if let Some(payload) = parse_data_line(line) {
-                out.push(payload);
-            }
+            out.extend(parse_data_line(line));
         }
         out
     }
 }
 
-fn parse_data_line(line: &str) -> Option<SsePayload> {
+/// 一行 data 可能同时携带 正文 + finish_reason + usage(部分服务商把 usage 塞进最后一个内容 chunk):
+/// 逐项提取、全部产出,不再提前 return(v0.2 在此丢正文,漏掉 `</t>` 触发多余修复请求)。
+/// 产出顺序:Reasoning → Delta → Finish → Usage。
+fn parse_data_line(line: &str) -> Vec<SsePayload> {
+    let mut out = Vec::new();
     let line = line.trim_end_matches('\r');
     if !line.starts_with("data:") {
-        return None;
+        return out;
     }
     let payload = line[5..].trim();
     if payload == "[DONE]" {
-        return Some(SsePayload::Done);
+        out.push(SsePayload::Done);
+        return out;
     }
-    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { return out };
+    let choice0 = v.get("choices").and_then(|c| c.get(0));
+    let delta = choice0.and_then(|c| c.get("delta"));
+    if let Some(d) = delta {
+        let reasoning = d
+            .get("reasoning_content")
+            .and_then(|x| x.as_str())
+            .or_else(|| d.get("reasoning").and_then(|x| x.as_str()))
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            out.push(SsePayload::Reasoning(reasoning.to_string()));
+        }
+        let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        if !content.is_empty() {
+            out.push(SsePayload::Delta(content.to_string()));
+        }
+    }
+    if let Some(reason) = choice0.and_then(|c| c.get("finish_reason")).and_then(|f| f.as_str()) {
+        out.push(SsePayload::Finish(reason.to_string()));
+    }
     if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
         let pt = u.get("prompt_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
         let ct = u.get("completion_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
-        return Some(SsePayload::Usage { prompt_tokens: pt, completion_tokens: ct });
+        let rt = u
+            .pointer("/completion_tokens_details/reasoning_tokens")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0);
+        out.push(SsePayload::Usage { prompt_tokens: pt, completion_tokens: ct, reasoning_tokens: rt });
     }
-    let choice0 = v.get("choices").and_then(|c| c.get(0));
-    if let Some(reason) = choice0
-        .and_then(|c| c.get("finish_reason"))
-        .and_then(|f| f.as_str())
-    {
-        return Some(SsePayload::Finish(reason.to_string()));
-    }
-    let delta = v
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("delta"))
-        .and_then(|d| d.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
-    if delta.is_empty() {
-        return None;
-    }
-    Some(SsePayload::Delta(delta.to_string()))
+    out
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -153,7 +165,7 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                SsePayload::Usage { prompt_tokens: 10, completion_tokens: 5 },
+                SsePayload::Usage { prompt_tokens: 10, completion_tokens: 5, reasoning_tokens: 0 },
                 SsePayload::Done,
             ]
         );
@@ -164,6 +176,30 @@ mod tests {
         let mut p = SseParser::new();
         let out = p.feed("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n");
         assert_eq!(out, vec![SsePayload::Finish("length".into())]);
+    }
+
+    #[test]
+    fn sse_content_with_finish_and_usage_in_same_chunk() {
+        // v0.2 缺陷:usage/finish_reason 提前 return,同 chunk 的正文(常含 `</t>`)被丢
+        let mut p = SseParser::new();
+        let out = p.feed(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"尾</t>\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n",
+        );
+        assert_eq!(
+            out,
+            vec![
+                SsePayload::Delta("尾</t>".into()),
+                SsePayload::Finish("stop".into()),
+                SsePayload::Usage { prompt_tokens: 7, completion_tokens: 3, reasoning_tokens: 2 },
+            ]
+        );
+    }
+
+    #[test]
+    fn sse_reasoning_separate_from_content() {
+        let mut p = SseParser::new();
+        let out = p.feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\",\"content\":null}}]}\ndata: {\"choices\":[{\"delta\":{\"reasoning\":\"再想\"}}]}\n");
+        assert_eq!(out, vec![SsePayload::Reasoning("想".into()), SsePayload::Reasoning("再想".into())]);
     }
 
     #[test]

@@ -128,6 +128,18 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         conn.execute_batch("ALTER TABLE blocks ADD COLUMN terms TEXT NOT NULL DEFAULT '';")?;
         conn.pragma_update(None, "user_version", 2)?;
     }
+    if version < 3 {
+        // v3(v0.3 §2.6.8):计时埋点 + 思考 token + 批规模
+        conn.execute_batch(
+            "ALTER TABLE usage_log ADD COLUMN ttft_ms INTEGER;
+             ALTER TABLE usage_log ADD COLUMN first_block_ms INTEGER;
+             ALTER TABLE usage_log ADD COLUMN first_byte_ms INTEGER;
+             ALTER TABLE usage_log ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE usage_log ADD COLUMN batch_blocks INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE usage_log ADD COLUMN batch_chars INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -186,6 +198,25 @@ pub struct ProviderRow {
     pub extra: String,
     pub is_active: bool,
     pub has_key: bool,
+}
+
+/// usage_log 一行(一次 HTTP 请求)
+#[derive(Debug, Default, Clone)]
+pub struct UsageRecord {
+    pub provider_id: i64,
+    pub article_id: Option<i64>,
+    pub kind: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub latency_ms: i64,
+    /// 首个正文 token − 请求发出
+    pub ttft_ms: Option<i64>,
+    /// 首个完整块 − 请求发出
+    pub first_block_ms: Option<i64>,
+    pub first_byte_ms: Option<i64>,
+    pub reasoning_tokens: i64,
+    pub batch_blocks: i64,
+    pub batch_chars: i64,
 }
 
 // ---------- 文章 ----------
@@ -602,21 +633,44 @@ impl Db {
 
     // ---------- 用量 ----------
 
-    pub fn insert_usage(
-        &self,
-        provider_id: i64,
-        article_id: Option<i64>,
-        kind: &str,
-        pt: i64,
-        ct: i64,
-        latency_ms: i64,
-    ) -> Result<()> {
+    pub fn insert_usage(&self, u: &UsageRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO usage_log(provider_id, article_id, kind, prompt_tokens, completion_tokens, latency_ms, created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![provider_id, article_id, kind, pt, ct, latency_ms, now()],
+            "INSERT INTO usage_log(provider_id, article_id, kind, prompt_tokens, completion_tokens, latency_ms,
+                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                u.provider_id,
+                u.article_id,
+                u.kind,
+                u.prompt_tokens,
+                u.completion_tokens,
+                u.latency_ms,
+                u.ttft_ms,
+                u.first_block_ms,
+                u.first_byte_ms,
+                u.reasoning_tokens,
+                u.batch_blocks,
+                u.batch_chars,
+                now()
+            ],
         )?;
+        Ok(())
+    }
+
+    /// 关思考字段被服务商拒绝 → 写回 extra.thinking_unsupported=true(下次不再注入)
+    pub fn mark_provider_thinking_unsupported(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let extra: String = conn
+            .query_row("SELECT extra FROM providers WHERE id=?1", params![id], |r| r.get(0))
+            .optional()?
+            .unwrap_or_else(|| "{}".into());
+        let mut v: serde_json::Value = serde_json::from_str(&extra).unwrap_or_else(|_| serde_json::json!({}));
+        if !v.is_object() {
+            v = serde_json::json!({});
+        }
+        v["thinking_unsupported"] = serde_json::json!(true);
+        conn.execute("UPDATE providers SET extra=?1 WHERE id=?2", params![v.to_string(), id])?;
         Ok(())
     }
 
@@ -645,5 +699,71 @@ impl Db {
             params![key, value],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db(name: &str) -> (Db, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("yidu-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.db");
+        (open_path(&path).unwrap(), dir)
+    }
+
+    #[test]
+    fn migration_v3_usage_columns_roundtrip() {
+        let (db, dir) = temp_db("usage");
+        db.insert_usage(&UsageRecord {
+            provider_id: 1,
+            article_id: None,
+            kind: "translate".into(),
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            latency_ms: 900,
+            ttft_ms: Some(300),
+            first_block_ms: Some(450),
+            first_byte_ms: Some(120),
+            reasoning_tokens: 5,
+            batch_blocks: 1,
+            batch_chars: 42,
+        })
+        .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+            assert_eq!(v, 3);
+            let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
+                .query_row(
+                    "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                )
+                .unwrap();
+            assert_eq!(row, (Some(300), Some(450), Some(120), 5, 1, 42));
+        }
+        assert_eq!(db.usage_summary().unwrap(), (1, 10, 20));
+        drop(db);
+        // 重开不重复迁移
+        let db2 = open_path(&dir.join("t.db")).unwrap();
+        assert_eq!(db2.usage_summary().unwrap().0, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mark_thinking_unsupported_merges_extra() {
+        let (db, dir) = temp_db("extra");
+        let id = db
+            .upsert_provider(None, "DeepSeek", "openai_compatible", "https://api.deepseek.com", "m", r#"{"temperature":0.3}"#)
+            .unwrap();
+        db.mark_provider_thinking_unsupported(id).unwrap();
+        let row = db.get_provider(id).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&row.extra).unwrap();
+        assert_eq!(v["thinking_unsupported"], serde_json::json!(true));
+        assert_eq!(v["temperature"], serde_json::json!(0.3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
