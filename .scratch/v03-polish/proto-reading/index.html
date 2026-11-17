@@ -1,0 +1,209 @@
+<!doctype html>
+<!--
+  PROTOTYPE — 一次性原型,勿并入 app/。
+  问题(工单 09):译文怎样才好读、且不必手动拖窗?按工单 12 的 macOS 原生 token。
+  三种「视图自适应」策略,?variant=A|B|C,浮条 ← → 切换,T 亮暗;所有方案:+ / − 缩放字号,0 复位,S 重放流式。
+  灰色大框 = 模拟的桌面(1100×760),快捷窗在其中按方案改变尺寸。md 渲染样式三方案共用(对齐 GitHub)。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>可读性原型</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --t1:#1d1d1f; --t2:#4c4c52; --t3:#6e6e73; --line:rgba(0,0,0,.1); --doc:#fff; --mat:rgba(240,240,244,.86); --accent:#0a7aff;
+  --code:rgba(120,120,128,.12); --f:-apple-system,"SF Pro Text","PingFang SC",sans-serif; --mono:"SF Mono",ui-monospace,Menlo,monospace; --scale:1; }
+body.dark { --t1:#f5f5f7; --t2:#c7c7cc; --t3:#98989f; --line:rgba(255,255,255,.12); --doc:#1e1e1e; --mat:rgba(44,44,48,.9); --accent:#0a84ff; --code:rgba(120,120,128,.24); }
+body { font: 13px/1.45 var(--f); color: var(--t1); background: #cfd2da; padding: 16px 16px 96px; }
+body.dark { background: #2a2c31; }
+.note { max-width: 1100px; margin: 0 auto 12px; background: rgba(255,255,255,.75); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; line-height: 1.6; color: #2a2c33; }
+body.dark .note { background: rgba(0,0,0,.4); color: #e3e4e8; }
+.desk { position: relative; width: min(1100px, 100%); height: 760px; margin: 0 auto; border-radius: 14px; overflow: hidden;
+  background: linear-gradient(135deg,#6b8cce,#b48fd6 50%,#f2b5a0); }
+body.dark .desk { background: linear-gradient(135deg,#23304d,#3d2c52 50%,#4d3330); }
+.desk .menubar { height: 24px; background: rgba(255,255,255,.35); backdrop-filter: blur(10px); font-size: 12px; display: flex; align-items: center; gap: 16px; padding: 0 14px; color: #111; }
+body.dark .desk .menubar { background: rgba(0,0,0,.35); color: #eee; }
+.desk .hud { position: absolute; right: 12px; bottom: 10px; font: 11px var(--mono); color: rgba(255,255,255,.9); background: rgba(0,0,0,.4); padding: 4px 8px; border-radius: 6px; }
+.qw { position: absolute; top: 60px; right: 60px; background: var(--mat); backdrop-filter: blur(30px) saturate(1.6); border-radius: 12px;
+  box-shadow: 0 22px 60px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.3); display: flex; flex-direction: column; overflow: hidden;
+  transition: height .22s ease-out, width .22s ease-out, top .22s ease-out, right .22s ease-out; }
+.tb { height: 44px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; border-bottom: .5px solid var(--line); }
+.lights { display: flex; gap: 8px; } .lights i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; display: block; }
+.lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+.seg { display: flex; background: rgba(120,120,128,.16); border-radius: 7px; padding: 2px; font-size: 12px; font-weight: 500; }
+.seg span { padding: 3px 10px; border-radius: 5px; color: var(--t2); cursor: pointer; white-space: nowrap; }
+.seg span.on { background: var(--doc); color: var(--t1); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.tbb { margin-left: auto; display: flex; gap: 2px; color: var(--t3); }
+.tbb span { min-width: 26px; height: 24px; display: grid; place-items: center; border-radius: 6px; cursor: pointer; font-size: 13px; padding: 0 4px; }
+.tbb span:hover { background: rgba(120,120,128,.16); }
+.pops { display: flex; gap: 8px; padding: 8px 12px 0; flex: none; }
+.pbtn { font-size: 12px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--doc); box-shadow: 0 .5px 1.5px rgba(0,0,0,.25); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--t1); }
+.input { margin: 8px 12px; background: var(--doc); border: .5px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: var(--t2); line-height: 1.5; flex: none; cursor: text; }
+.input.collapsed { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t3); font-size: 12px; padding: 5px 10px; }
+.doc { flex: 1; min-height: 0; overflow: auto; background: var(--doc); margin: 0 8px; border-radius: 8px; padding: 14px 16px; }
+.sb { height: 32px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; font-size: 11.5px; color: var(--t3); white-space: nowrap; }
+.sb .b { margin-left: auto; height: 22px; padding: 0 10px; border-radius: 6px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; font-size: 12px; }
+.sb .g { height: 22px; padding: 0 10px; border-radius: 6px; background: var(--doc); box-shadow: 0 .5px 1.5px rgba(0,0,0,.25); display: inline-flex; align-items: center; color: var(--t1); font-size: 12px; }
+.fade { position: relative; } .fade::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: linear-gradient(transparent, var(--doc)); pointer-events: none; }
+.aa { position: absolute; top: 40px; right: 10px; width: 230px; background: var(--mat); backdrop-filter: blur(20px); border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.25); padding: 10px 12px; font-size: 12px; z-index: 5; }
+.aa .r { display: flex; align-items: center; gap: 8px; margin: 6px 0; } .aa .r label { width: 34px; color: var(--t3); }
+.aa input[type=range] { flex: 1; accent-color: var(--accent); }
+
+/* ---------- md 渲染(GitHub 对齐,三方案共用;字号随 --scale) ---------- */
+.md { font-family: var(--f); font-weight: 500; color: var(--t1); font-size: calc(15px * var(--scale)); line-height: 1.75; word-break: break-word; }
+.md > * + * { margin-top: .75em; }
+.md h2 { font-size: 1.3em; font-weight: 700; line-height: 1.3; padding-bottom: .3em; border-bottom: .5px solid var(--line); margin-top: 1.1em; }
+.md h2:first-child { margin-top: 0; }
+.md h3 { font-size: 1.1em; font-weight: 650; margin-top: 1em; }
+.md ul, .md ol { padding-left: 1.5em; } .md li + li { margin-top: .25em; } .md li > ul, .md li > ol { margin-top: .25em; }
+.md li::marker { color: var(--t3); }
+.md a { color: var(--accent); text-decoration: none; } .md a:hover { text-decoration: underline; }
+.md code { font: .86em var(--mono); background: var(--code); padding: .15em .4em; border-radius: 4px; }
+.md pre { background: var(--code); border-radius: 8px; padding: .8em 1em; overflow: auto; font: calc(12.5px * var(--scale))/1.6 var(--mono); font-weight: 400; }
+.md pre code { background: none; padding: 0; font-size: inherit; }
+.md blockquote { border-left: 3px solid var(--line); padding: 0 1em; color: var(--t2); }
+.md table { border-collapse: collapse; font-size: .92em; display: block; overflow-x: auto; }
+.md th, .md td { border: .5px solid var(--line); padding: .35em .75em; text-align: left; }
+.md th { font-weight: 650; background: var(--code); }
+.md hr { border: 0; border-top: .5px solid var(--line); }
+.src { font-weight: 400; color: var(--t2); font-size: calc(13.5px * var(--scale)); line-height: 1.65; }
+.pair + .pair { margin-top: 1em; padding-top: 1em; border-top: .5px dashed var(--line); }
+.pair .src { margin-bottom: .35em; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
+.cols .src { padding-bottom: .9em; } .cols .tr { padding-bottom: .9em; }
+.caret { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+#switcher { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 99; display: flex; gap: 4px; align-items: center; background: #111; color: #fff; border-radius: 999px; padding: 6px; border: 2px dashed #f5c400; font: 500 13px var(--f); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#switcher button { white-space: nowrap; background: #2a2a2a; color: #fff; border: 0; border-radius: 999px; height: 32px; min-width: 32px; padding: 0 12px; cursor: pointer; font: inherit; }
+#switcher .lbl { padding: 0 14px; min-width: 260px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="note" id="note"></div>
+<div class="desk" id="desk"><div class="menubar"><b></b>译读<span>文件</span><span>编辑</span><span>显示</span></div><div class="qw" id="qw"></div><div class="hud" id="hud"></div></div>
+<div id="switcher"><button id="prev">←</button><span class="lbl" id="lbl"></span><button id="next">→</button><button id="theme">亮/暗 T</button><button id="replay">重放流式 S</button></div>
+<script>
+// 内容:一段带结构的 md 原文与译文(按块对齐)
+const BLOCKS = [
+  ["## Why hydration fails", "<h2>为什么水合会失败</h2>"],
+  ["Hydration mismatches happen when the server-rendered HTML differs from the client's first render. React then throws away the server markup and re-renders, which costs time and causes a visible flash.",
+   "<p>当服务端渲染的 HTML 与客户端首次渲染的结果不一致时,就会发生<b>水合不匹配</b>。React 会丢弃服务端标记并重新渲染,既耗时又会造成可见的闪烁。</p>"],
+  ["Common causes:\n- Reading `window` or `document` during render\n  - including in custom hooks\n- Non-deterministic values like `Date.now()`\n- Unstable `key` props",
+   "<p>常见原因:</p><ul><li>渲染期间读取 <code>window</code> 或 <code>document</code><ul><li>自定义 Hook 中同样如此</li></ul></li><li><code>Date.now()</code> 这类不确定的值</li><li>不稳定的 <code>key</code> 属性</li></ul>"],
+  ["| Cause | Fix |\n|---|---|\n| `window` access | move to `useEffect` |\n| random ids | use `useId()` |",
+   "<table><thead><tr><th>原因</th><th>修复</th></tr></thead><tbody><tr><td>访问 <code>window</code></td><td>移到 <code>useEffect</code></td></tr><tr><td>随机 id</td><td>改用 <code>useId()</code></td></tr></tbody></table>"],
+  ["> Tip: React 19 reports the exact mismatching node in dev mode.", "<blockquote><p>提示:React 19 在开发模式下会报告具体不匹配的节点。</p></blockquote>"],
+  ["```tsx\nconst id = useId();\n```", "<pre><code>const id = useId();</code></pre>"],
+  ["See the [official guide](https://react.dev) for more.", "<p>更多内容见<a href=\"#\">官方指南</a>。</p>"],
+];
+const SRC_ONE = "Hydration mismatches happen when the server-rendered HTML differs from the client's first render…";
+let shown = BLOCKS.length, timer = null, scale = 1, view = "译文", aaOpen = false, expanded = false, inputOpen = false;
+const DESK_H = 760, TOP = 60, MAXH = Math.round((DESK_H - TOP) * 0.85);
+
+function body(mode, wide) {
+  const caret = shown < BLOCKS.length ? '<span class="caret"></span>' : "";
+  const bs = BLOCKS.slice(0, shown);
+  const srcHtml = (s) => `<div class="src">${s.replace(/\n/g, "<br>")}</div>`;
+  if (mode === "原文") return `<div class="md" style="font-weight:400">${bs.map(([s]) => srcHtml(s)).join("")}</div>`;
+  if (mode === "对照") {
+    if (wide) return `<div class="md cols">${bs.map(([s, t]) => `${srcHtml(s)}<div class="tr">${t}</div>`).join("")}</div>${caret}`;
+    return `<div class="md">${bs.map(([s, t]) => `<div class="pair">${srcHtml(s)}<div class="tr">${t}</div></div>`).join("")}${caret}</div>`;
+  }
+  return `<div class="md">${bs.map(([, t]) => t).join("")}${caret}</div>`;
+}
+const seg = (opts) => `<div class="seg">${opts.map((o) => `<span class="${o === view ? "on" : ""}" onclick="view='${o}';render()">${o}</span>`).join("")}</div>`;
+const metrics = () => shown < BLOCKS.length ? `翻译中 ${shown}/${BLOCKS.length} · 首字 0.6s` : `首字 0.62s · 1.9s · 153 tok`;
+
+// 量内容高度:把 doc 放进隐藏容器测
+function measure(html, width) {
+  const m = document.createElement("div");
+  m.style.cssText = `position:absolute;visibility:hidden;width:${width - 16 - 32}px`;
+  m.innerHTML = html; document.body.appendChild(m); const h = m.scrollHeight; m.remove(); return h;
+}
+
+// ---------- A:自动长高 ----------
+function renderA(qw) {
+  const W = 440, chrome = 44 + 30 + (inputOpen ? 62 : 32) + 32 + 18;
+  const content = measure(body(view, false), W) + 28;
+  const H = Math.min(MAXH, chrome + content);
+  Object.assign(qw.style, { width: W + "px", height: H + "px", top: TOP + "px", right: "60px" });
+  qw.innerHTML = `<div class="tb"><div class="lights"><i></i><i></i><i></i></div>${seg(["译文", "对照", "原文"])}<div class="tbb"><span>📌</span></div></div>
+   <div class="pops"><span class="pbtn">自动 · EN → 中 ⌃</span><span class="pbtn" style="margin-left:auto">glm-4.5-flash ⌃</span></div>
+   <div class="input ${inputOpen ? "" : "collapsed"}" onclick="inputOpen=!inputOpen;render()">${inputOpen ? SRC_ONE + " Common causes: …" : "原文 · " + SRC_ONE}</div>
+   <div class="doc">${body(view, false)}</div>
+   <div class="sb"><span>${metrics()}</span><span class="g">复制</span><span class="b">存入文章库</span></div>`;
+  return `窗口 ${W}×${H}${H === MAXH ? "(已到上限 85% 屏高,内部滚动)" : "(随内容长高)"} · 字号 ×${scale.toFixed(2)}`;
+}
+
+// ---------- B:固定尺寸 + Aa 外观面板 ----------
+function renderB(qw) {
+  const W = 420, H = 620;
+  Object.assign(qw.style, { width: W + "px", height: H + "px", top: TOP + "px", right: "60px" });
+  qw.innerHTML = `<div class="tb"><div class="lights"><i></i><i></i><i></i></div>${seg(["译文", "对照", "原文"])}<div class="tbb"><span onclick="aaOpen=!aaOpen;render()" style="${aaOpen ? "color:var(--accent)" : ""}">Aa</span><span>📌</span></div></div>
+   ${aaOpen ? `<div class="aa"><div class="r"><label>字号</label><input type="range" min="0.8" max="1.5" step="0.05" value="${scale}" oninput="scale=+this.value;render()"><span>${Math.round(15 * scale)}</span></div>
+     <div class="r"><label>密度</label><div class="seg"><span class="${scale <= 0.93 ? "on" : ""}" onclick="scale=0.9;render()">紧凑</span><span class="${scale > 0.93 && scale < 1.1 ? "on" : ""}" onclick="scale=1;render()">标准</span><span class="${scale >= 1.1 ? "on" : ""}" onclick="scale=1.15;render()">宽松</span></div></div>
+     <div style="color:var(--t3);margin-top:4px">快捷窗与主窗各自记忆</div></div>` : ""}
+   <div class="pops"><span class="pbtn">自动 · EN → 中 ⌃</span><span class="pbtn" style="margin-left:auto">glm-4.5-flash ⌃</span></div>
+   <div class="input collapsed">原文 · ${SRC_ONE}</div>
+   <div class="doc">${body(view, false)}</div>
+   <div class="sb"><span>${metrics()}</span><span class="g">复制</span><span class="b">存入文章库</span></div>`;
+  return `窗口固定 ${W}×${H}(记忆用户拖的尺寸)· 内部滚动 · 字号 ×${scale.toFixed(2)}`;
+}
+
+// ---------- C:两档吸附(紧凑条 ↔ 阅读面板) ----------
+function renderC(qw) {
+  if (!expanded) {
+    const W = 600, H = 300;
+    Object.assign(qw.style, { width: W + "px", height: H + "px", top: "120px", right: "250px" });
+    qw.innerHTML = `<div class="tb" style="height:52px"><div class="lights"><i></i><i></i><i></i></div><div style="flex:1;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--t1)">${SRC_ONE}</div><span class="pbtn">EN → 中</span></div>
+      <div class="doc fade" style="margin-top:8px;overflow:hidden">${body("译文", false)}</div>
+      <div class="sb"><span>${metrics()}</span><span class="g">复制 ↵</span><span class="b" onclick="expanded=true;render()" style="cursor:pointer">展开阅读 ⌘↩</span></div>`;
+    return `紧凑条 ${W}×${H}:只露前几行,长译文点「展开阅读」`;
+  }
+  const W = 860, H = MAXH;
+  Object.assign(qw.style, { width: W + "px", height: H + "px", top: TOP + "px", right: "120px" });
+  const wide = view === "对照";
+  qw.innerHTML = `<div class="tb"><div class="lights"><i></i><i></i><i></i></div>${seg(["译文", "对照", "原文"])}<div class="tbb"><span onclick="expanded=false;render()">⤡ 收起</span><span>📌</span></div></div>
+     <div class="doc" style="margin-top:8px"><div style="max-width:${wide ? 780 : 640}px;margin:0 auto">${body(view, wide)}</div></div>
+     <div class="sb"><span>${metrics()}</span><span class="g">复制</span><span class="b">存入文章库</span></div>`;
+  return `阅读面板 ${W}×${H} · 正文限宽 ${wide ? 780 : 640}px${wide ? " · 对照为左右两栏" : ""} · 字号 ×${scale.toFixed(2)}`;
+}
+
+const VARIANTS = {
+  A: { name: "自动长高", r: renderA, note: "<b>A · 自动长高</b>:窗口宽度固定 440,高度随译文增长(流式时逐步长高,动画 220ms),上限 85% 屏高后内部滚动;有结果后输入框收成一行「原文 · …」,点击展开;+ / − 直接缩放字号;窄窗对照 = 每块上原文下译文。按 S 看流式长高。" },
+  B: { name: "固定尺寸 + Aa 面板", r: renderB, note: "<b>B · 固定尺寸 + Aa</b>:窗口尺寸固定并记忆用户拖的大小,内容内部滚动;工具栏 Aa 弹出外观面板(字号滑杆 + 紧凑/标准/宽松三档),快捷窗与主窗各自记忆;取代现有一长串阅读外观设置(主题/字体/行高/块距/宽度/强调色)。" },
+  C: { name: "两档吸附", r: renderC, note: "<b>C · 两档吸附</b>:平时是 Spotlight 式宽紧凑条,只露译文前几行(渐隐);长文按 ⌘↩「展开阅读」吸附成 860 宽的阅读面板,正文限宽居中,对照自动变左右两栏;⤡ 收起回紧凑条。" },
+};
+const keys = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+let variant = keys.includes(params.get("variant")) ? params.get("variant") : "A";
+let dark = params.get("dark") === "1";
+function render() {
+  document.body.classList.toggle("dark", dark);
+  document.documentElement.style.setProperty("--scale", scale);
+  document.getElementById("hud").textContent = VARIANTS[variant].r(document.getElementById("qw"));
+  document.getElementById("note").innerHTML = VARIANTS[variant].note + "<br>按键:+ / − 缩放字号,0 复位,S 重放流式,T 亮暗。";
+  document.getElementById("lbl").textContent = `${variant} — ${VARIANTS[variant].name} · ${dark ? "暗" : "亮"}`;
+  const u = new URL(location.href); u.searchParams.set("variant", variant); u.searchParams.set("dark", dark ? "1" : "0"); history.replaceState(null, "", u);
+}
+function replay() { clearInterval(timer); shown = 0; render(); timer = setInterval(() => { shown++; render(); if (shown >= BLOCKS.length) clearInterval(timer); }, 450); }
+const go = (d) => { variant = keys[(keys.indexOf(variant) + d + keys.length) % keys.length]; aaOpen = false; expanded = false; render(); };
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("theme").onclick = () => { dark = !dark; render(); };
+document.getElementById("replay").onclick = replay;
+addEventListener("keydown", (e) => {
+  if (e.target.closest("input,textarea,select")) return;
+  const k = e.key;
+  if (k === "ArrowLeft") go(-1); else if (k === "ArrowRight") go(1);
+  else if (k === "t" || k === "T") { dark = !dark; render(); }
+  else if (k === "s" || k === "S") replay();
+  else if (k === "+" || k === "=") { scale = Math.min(1.5, +(scale + 0.1).toFixed(2)); render(); }
+  else if (k === "-" || k === "_") { scale = Math.max(0.8, +(scale - 0.1).toFixed(2)); render(); }
+  else if (k === "0") { scale = 1; render(); }
+});
+render();
+</script>
+</body>
+</html>

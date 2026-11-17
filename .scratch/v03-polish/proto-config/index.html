@@ -1,0 +1,236 @@
+<!doctype html>
+<!--
+  PROTOTYPE — 一次性原型,勿并入 app/。
+  问题(工单 07):模型配置交互该怎么做?按工单 12 的 macOS 原生视觉(设置独立窗口)。
+  三个结构不同的方案,?variant=A|B|C,底部浮条 ← → 切换,T 切亮暗。右侧为三方案共用的「快捷窗模型菜单」。
+  全部为本地假数据与假请求:
+    - 测试规则:Key 为空 → 缺少密钥;Key 含 "bad" → 401;模型含 "nope" → 404;URL 含 "xx" → 网络不可达;否则成功。
+    - 拉取模型列表:延迟 600ms 返回预设清单。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>模型配置原型</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --t1:#1d1d1f; --t2:#4c4c52; --t3:#6e6e73; --line:rgba(0,0,0,.1); --bgdoc:#fff; --win:#f2f2f7; --group:#fff;
+  --mat:rgba(236,236,240,.85); --accent:#0a7aff; --ok:#1f9d3a; --warn:#c77700; --err:#d70015; --field:#fff; --sel:rgba(10,122,255,.12);
+  --f:-apple-system,"SF Pro Text","PingFang SC",sans-serif; --mono:"SF Mono",ui-monospace,Menlo,monospace; }
+.dark { --t1:#f5f5f7; --t2:#c7c7cc; --t3:#98989f; --line:rgba(255,255,255,.12); --bgdoc:#1e1e1e; --win:#1c1c1e; --group:#2c2c2e;
+  --mat:rgba(44,44,48,.9); --accent:#0a84ff; --ok:#32d74b; --warn:#ffb340; --err:#ff453a; --field:#1c1c1e; --sel:rgba(10,132,255,.22); }
+body { font: 13px/1.45 var(--f); color: var(--t1); background: linear-gradient(135deg,#6b8cce,#b48fd6 50%,#f2b5a0); min-height: 100vh; padding: 24px 24px 100px; }
+.dark body, body.dark { background: linear-gradient(135deg,#23304d,#3d2c52 50%,#4d3330); }
+.note { max-width: 1180px; margin: 0 auto 16px; background: rgba(255,255,255,.75); border-radius: 10px; padding: 10px 14px; color: #2a2c33; font-size: 12.5px; line-height: 1.6; }
+body.dark .note { background: rgba(0,0,0,.4); color: #e3e4e8; }
+.stage { display: flex; gap: 24px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+.cap { color: #fff; font-size: 11px; font-weight: 600; letter-spacing: .06em; margin: 0 0 8px 4px; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.win { border-radius: 12px; overflow: hidden; box-shadow: 0 22px 60px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.3); background: var(--win); color: var(--t1); }
+.lights { display: flex; gap: 8px; } .lights i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; display: block; }
+.lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+.sw { width: 640px; min-height: 520px; display: grid; grid-template-columns: 180px 1fr; }
+.sside { background: var(--mat); padding: 14px 8px 8px; border-right: .5px solid var(--line); }
+.sside .lights { margin: 0 0 22px 6px; }
+.nav { padding: 5px 8px; border-radius: 6px; display: flex; gap: 8px; align-items: center; color: var(--t1); }
+.nav.on { background: var(--accent); color: #fff; }
+.ic { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; color: #fff; font-size: 11px; flex: none; }
+.smain { padding: 18px 20px 20px; overflow: auto; }
+.smain h4 { font-size: 15px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.gl { background: var(--group); border-radius: 10px; border: .5px solid var(--line); margin-bottom: 8px; }
+.gr { display: flex; align-items: center; min-height: 38px; padding: 6px 12px; gap: 10px; border-top: .5px solid var(--line); }
+.gr:first-child { border-top: 0; }
+.gr > label { flex: none; width: 74px; color: var(--t1); }
+.gr .v { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--t3); min-width: 0; }
+.foot { font-size: 11.5px; color: var(--t3); padding: 2px 4px 14px; line-height: 1.5; }
+.foot .mono { font-family: var(--mono); font-size: 11px; }
+input.tf, select.tf { flex: 1; min-width: 0; height: 24px; border: .5px solid var(--line); border-radius: 6px; background: var(--field); color: var(--t1); padding: 0 8px; font: 12.5px var(--f); outline: none; }
+input.tf.mono { font-family: var(--mono); font-size: 11.5px; }
+input.tf:focus, select.tf:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
+.btn { height: 24px; padding: 0 10px; border-radius: 6px; border: .5px solid var(--line); background: var(--group); color: var(--t1); font: 12.5px var(--f); cursor: pointer; white-space: nowrap; box-shadow: 0 .5px 1.5px rgba(0,0,0,.15); }
+.btn.p { background: var(--accent); color: #fff; border-color: transparent; }
+.btn:disabled { background: rgba(120,120,128,.18); color: var(--t3); box-shadow: none; cursor: default; }
+.st { font-size: 12px; display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
+.st.ok { color: var(--ok); } .st.err { color: var(--err); } .st.warn { color: var(--warn); } .st.busy { color: var(--t3); }
+.saved { font-size: 11px; color: var(--t3); transition: opacity .3s; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(120,120,128,.18); color: var(--t2); font-weight: 500; }
+.badge.on { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.plist .it { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.plist .it.on { background: var(--sel); }
+.plist .it small { color: var(--t3); font-size: 11px; display: block; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.dot.off { background: rgba(120,120,128,.45); } .dot.err { background: var(--err); }
+.presets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.preset { border: .5px solid var(--line); background: var(--group); border-radius: 10px; padding: 10px; cursor: pointer; }
+.preset:hover { border-color: var(--accent); }
+.preset b { display: block; font-weight: 600; } .preset small { color: var(--t3); font-size: 11.5px; }
+.steps { display: flex; gap: 6px; margin-bottom: 14px; font-size: 11.5px; color: var(--t3); }
+.steps span { padding: 2px 8px; border-radius: 999px; background: rgba(120,120,128,.14); }
+.steps span.on { background: var(--accent); color: #fff; } .steps span.done { color: var(--ok); }
+.big { width: 100%; height: 34px; font-size: 13px; }
+.menu { width: 300px; background: var(--mat); border-radius: 10px; padding: 5px; box-shadow: 0 16px 40px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.25); color: var(--t1); font-size: 13px; backdrop-filter: blur(20px); }
+.menu .h { font-size: 11px; color: var(--t3); font-weight: 600; padding: 6px 10px 2px; }
+.menu .m { padding: 4px 10px; border-radius: 5px; display: flex; gap: 8px; align-items: center; }
+.menu .m:hover:not(.dis) { background: var(--accent); color: #fff; }
+.menu .m.dis { color: var(--t3); } .menu .m .r { margin-left: auto; font-size: 11px; color: inherit; opacity: .7; }
+.menu hr { border: 0; border-top: .5px solid var(--line); margin: 4px 6px; }
+.state { width: 300px; margin-top: 14px; background: rgba(0,0,0,.55); color: #e8e8ea; border-radius: 10px; padding: 10px 12px; font: 11px/1.5 var(--mono); white-space: pre-wrap; }
+#switcher { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 99; display: flex; gap: 4px; align-items: center; background: #111; color: #fff; border-radius: 999px; padding: 6px; border: 2px dashed #f5c400; font: 500 13px var(--f); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#switcher button { background: #2a2a2a; color: #fff; border: 0; border-radius: 999px; height: 32px; min-width: 32px; padding: 0 12px; cursor: pointer; font: inherit; }
+#switcher .lbl { padding: 0 14px; min-width: 250px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="note" id="note"></div>
+<div class="stage">
+  <div><div class="cap">设置窗口 · 模型</div><div class="win sw" id="settings"></div></div>
+  <div><div class="cap">快捷窗 · 模型弹出菜单(三方案共用)</div><div class="menu" id="menu"></div><div class="state" id="state"></div></div>
+</div>
+<div id="switcher"><button id="prev">←</button><span class="lbl" id="lbl"></span><button id="next">→</button><button id="theme">亮/暗 (T)</button></div>
+<script>
+// ---------------- 假数据与假后端 ----------------
+const PRESETS = {
+  DeepSeek: { base: "https://api.deepseek.com", models: ["deepseek-flash", "deepseek-v4-pro", "deepseek-chat"], icon: "#4d6bfe", hint: "sk- 开头", keyPrefix: "sk-" },
+  GLM: { base: "https://open.bigmodel.cn/api/paas/v4", models: ["glm-4.5-flash", "glm-4.6", "glm-4-flash"], icon: "#3859ff", hint: "id.secret 形式", keyPrefix: "" },
+  OpenAI: { base: "https://api.openai.com/v1", models: ["gpt-5-mini", "gpt-5-nano", "gpt-5"], icon: "#10a37f", hint: "sk-proj- 开头", keyPrefix: "sk-proj-" },
+  Ollama: { base: "http://localhost:11434", models: ["qwen3:4b", "qwen3:8b", "gemma3:4b"], icon: "#555", hint: "本地,无需密钥", keyPrefix: null },
+};
+const providers = [
+  { id: 1, name: "GLM", preset: "GLM", base: PRESETS.GLM.base, key: "c3f…9a1e", model: "glm-4.5-flash", active: true, test: { ok: true, ms: 412, ctx: "128K" } },
+  { id: 2, name: "DeepSeek", preset: "DeepSeek", base: PRESETS.DeepSeek.base, key: "", model: "deepseek-flash", active: false, test: null },
+  { id: 3, name: "ada(自定义)", preset: null, base: "http://ada-cli-golang.example.com/claude", key: "sk-…77d0", model: "auto", active: false, test: { ok: false, kind: "model", msg: "模型「auto」不存在" } },
+];
+let sel = 1, lastSaved = null, wizard = { step: 0, preset: null, base: "", key: "", model: "", models: [], test: null };
+const byId = (id) => providers.find((p) => p.id === id);
+function chatUrl(base, preset) {
+  if (preset === "Ollama" || /11434/.test(base)) return "POST " + base.replace(/\/+$/, "") + "/api/chat";
+  const b = base.trim().replace(/\/+$/, "");
+  return "POST " + (b.endsWith("/chat/completions") ? b : b + "/chat/completions");
+}
+function fakeTest(p, done) {
+  setTimeout(() => {
+    const needKey = p.preset !== "Ollama";
+    let r;
+    if (/xx/.test(p.base)) r = { ok: false, kind: "net", msg: "无法连接到服务器(检查地址或代理)" };
+    else if (needKey && !p.key) r = { ok: false, kind: "key", msg: "缺少 API 密钥" };
+    else if (/bad/.test(p.key)) r = { ok: false, kind: "key", msg: "密钥无效(HTTP 401)" };
+    else if (/nope/.test(p.model) || p.model === "auto") r = { ok: false, kind: "model", msg: `模型「${p.model}」不存在(HTTP 404)` };
+    else r = { ok: true, ms: 300 + Math.round(Math.random() * 300), ctx: p.preset === "Ollama" ? "8K(num_ctx)" : "128K" };
+    done(r);
+  }, 700);
+}
+function fakeModels(p, done) { setTimeout(() => done(p.preset ? PRESETS[p.preset].models : ["claude-sonnet", "claude-haiku", "gpt-5-mini"]), 600); }
+const canActivate = (p) => p.test && p.test.ok;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function status(t) {
+  if (!t) return `<span class="st warn">● 未测试</span>`;
+  if (t.busy) return `<span class="st busy">⟳ 测试中…</span>`;
+  if (t.ok) return `<span class="st ok">✓ 已连通 · ${t.ms} ms · 上下文 ${t.ctx}</span>`;
+  return `<span class="st err">✕ ${esc(t.msg)}</span>`;
+}
+function save(p, field, val) { p[field] = val; p.test = null; lastSaved = Date.now(); render(); }
+function runTest(p) { p.test = { busy: true }; render(); fakeTest(p, (r) => { p.test = r; render(); }); }
+function activate(p) { if (!canActivate(p)) return; providers.forEach((x) => (x.active = x === p)); render(); }
+function savedHint() { return lastSaved && Date.now() - lastSaved < 2500 ? `<span class="saved">已自动保存</span>` : ""; }
+
+const NAV = `<div class="nav on"><span class="ic" style="background:#5e5ce6">✦</span>模型</div><div class="nav"><span class="ic" style="background:#30b0c7">文</span>翻译</div><div class="nav"><span class="ic" style="background:#ff9f0a">⌥</span>快捷窗</div><div class="nav"><span class="ic" style="background:#34c759">¥</span>用量</div>`;
+
+// ---------------- A:单页分组列表(服务商用弹出按钮切换) ----------------
+function renderA() {
+  const p = byId(sel);
+  const needKey = p.preset !== "Ollama";
+  return `<div class="sside"><div class="lights"><i></i><i></i><i></i></div>${NAV}</div>
+  <div class="smain"><h4>模型 ${savedHint()}</h4>
+    <div class="gl">
+      <div class="gr"><label>服务商</label><select class="tf" onchange="sel=+this.value;render()">${providers.map((x) => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(x.name)}${x.active ? "(使用中)" : ""}</option>`).join("")}<option disabled>──────</option><option disabled>添加服务商…</option></select></div>
+      <div class="gr"><label>地址</label><input class="tf mono" value="${esc(p.base)}" onchange="save(byId(sel),'base',this.value)"></div>
+      ${needKey ? `<div class="gr"><label>API 密钥</label><input class="tf mono" placeholder="粘贴密钥(${PRESETS[p.preset]?.hint ?? "自定义"})" value="${esc(p.key)}" onchange="save(byId(sel),'key',this.value)"></div>` : ""}
+      <div class="gr"><label>模型</label><input class="tf mono" list="ml" value="${esc(p.model)}" onchange="save(byId(sel),'model',this.value)"><datalist id="ml">${(p._models || []).map((m) => `<option value="${m}">`).join("")}</datalist><button class="btn" onclick="const q=byId(sel);fakeModels(q,(m)=>{q._models=m;render()})">${p._models ? `已拉取 ${p._models.length} 个` : "拉取列表"}</button></div>
+    </div>
+    <div class="foot"><span class="mono">${esc(chatUrl(p.base, p.preset))}</span></div>
+    <div class="gl"><div class="gr">${status(p.test)}<span class="v"><button class="btn" onclick="runTest(byId(sel))">测试</button>${p.active ? `<span class="badge on">使用中</span>` : `<button class="btn p" ${canActivate(p) ? "" : "disabled title='先测试通过'"} onclick="activate(byId(sel))">设为使用中</button>`}</span></div></div>
+    <div class="foot">修改即自动保存;测试使用当前填写的值。未通过测试的服务商不能设为使用中。</div>
+  </div>`;
+}
+
+// ---------------- B:服务商列表 + 详情(每个服务商一行状态) ----------------
+function renderB() {
+  const p = byId(sel);
+  const needKey = p.preset !== "Ollama";
+  return `<div class="sside"><div class="lights"><i></i><i></i><i></i></div>${NAV}</div>
+  <div class="smain" style="display:grid;grid-template-columns:170px 1fr;gap:14px;padding-right:16px">
+    <div><h4 style="font-size:13px">服务商</h4><div class="gl plist" style="padding:4px">
+      ${providers.map((x) => `<div class="it ${x.id === sel ? "on" : ""}" onclick="sel=${x.id};render()"><span class="dot ${x.test?.ok ? "" : x.test ? "err" : "off"}"></span><div style="min-width:0">${esc(x.name)}${x.active ? ` <span class="badge on">使用中</span>` : ""}<small>${esc(x.model)}</small></div></div>`).join("")}
+      <div class="it" style="color:var(--accent)" onclick="variant='C';render()">＋ 添加…</div></div>
+      <div class="foot">● 绿 = 已连通,红 = 失败,灰 = 未测试</div></div>
+    <div><h4 style="font-size:13px">${esc(p.name)} ${savedHint()}</h4>
+      <div class="gl">
+        <div class="gr"><label>地址</label><input class="tf mono" value="${esc(p.base)}" onchange="save(byId(sel),'base',this.value)"></div>
+        ${needKey ? `<div class="gr"><label>密钥</label><input class="tf mono" placeholder="粘贴密钥" value="${esc(p.key)}" onchange="save(byId(sel),'key',this.value)"></div>` : ""}
+        <div class="gr"><label>模型</label><select class="tf" onchange="save(byId(sel),'model',this.value)" onfocus="const q=byId(sel);if(!q._models)fakeModels(q,(m)=>{q._models=m;render()})">${[...new Set([p.model, ...(p._models || [])])].map((m) => `<option ${m === p.model ? "selected" : ""}>${esc(m)}</option>`).join("")}${p._models ? "" : "<option disabled>点开即拉取…</option>"}</select></div>
+        <div class="gr"><label>思考</label><span class="v" style="margin-left:0">关闭(推荐,首字更快)</span></div>
+      </div>
+      <div class="foot mono">${esc(chatUrl(p.base, p.preset))}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${status(p.test)}</div>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn" onclick="runTest(byId(sel))">测试</button>${p.active ? "" : `<button class="btn p" ${canActivate(p) ? "" : "disabled"} onclick="activate(byId(sel))">设为使用中</button>`}<button class="btn" style="margin-left:auto;color:var(--err)">删除</button></div>
+    </div>
+  </div>`;
+}
+
+// ---------------- C:连接向导(添加)+ 已连接卡片 ----------------
+function renderC() {
+  const w = wizard;
+  const steps = ["选服务商", "粘贴密钥", "选模型", "完成"].map((s, i) => `<span class="${i === w.step ? "on" : i < w.step ? "done" : ""}">${i < w.step ? "✓ " : ""}${s}</span>`).join("");
+  let body = "";
+  if (w.step === 0) body = `<div class="presets">${Object.entries(PRESETS).map(([k, v]) => `<div class="preset" onclick="wizard={...wizard,preset:'${k}',base:'${v.base}',step:${k === "Ollama" ? 2 : 1}};if('${k}'==='Ollama')fakeModels({preset:'${k}'},(m)=>{wizard.models=m;render()});render()"><b><span class="ic" style="background:${v.icon};display:inline-grid;margin-right:6px">${k[0]}</span>${k}</b><small>${v.hint}</small></div>`).join("")}<div class="preset" onclick="wizard={...wizard,preset:null,base:'',step:1};render()"><b>自定义</b><small>任意 OpenAI 兼容地址</small></div></div>`;
+  if (w.step === 1) body = `<div class="gl">${w.preset ? "" : `<div class="gr"><label>地址</label><input class="tf mono" placeholder="https://…/v1" value="${esc(w.base)}" oninput="wizard.base=this.value"></div>`}<div class="gr"><label>API 密钥</label><input class="tf mono" placeholder="${w.preset ? PRESETS[w.preset].hint : "粘贴密钥"}" value="${esc(w.key)}" oninput="wizard.key=this.value"></div></div>
+    <div class="foot">粘贴后自动验证密钥并拉取可用模型。地址:<span class="mono">${esc(chatUrl(w.base || "https://…", w.preset))}</span></div>
+    <button class="btn p big" onclick="wizard.test={busy:true};render();fakeTest({preset:wizard.preset,base:wizard.base,key:wizard.key,model:'x'},(r)=>{wizard.test=r;if(r.ok){fakeModels({preset:wizard.preset},(m)=>{wizard.models=m;wizard.model=m[0];wizard.step=2;render()})}else render()})">验证并继续</button>
+    <div style="margin-top:8px">${w.test ? status(w.test) : ""}</div>`;
+  if (w.step === 2) body = `<div class="foot">已拉取 ${w.models.length || "…"} 个模型,推荐项已选中:</div><div class="gl plist" style="padding:4px">${(w.models || []).map((m, i) => `<div class="it ${m === w.model ? "on" : ""}" onclick="wizard.model='${m}';render()">${m}${i === 0 ? ` <span class="badge">推荐 · 快</span>` : ""}</div>`).join("") || `<div class="it">拉取中…</div>`}</div>
+    <button class="btn p big" style="margin-top:10px" onclick="const np={id:Date.now(),name:wizard.preset||'自定义',preset:wizard.preset,base:wizard.base,key:wizard.key,model:wizard.model,active:false,test:{ok:true,ms:388,ctx:'128K'}};providers.push(np);activate(np);sel=np.id;wizard.step=3;render()">完成并设为使用中</button>`;
+  if (w.step === 3) body = `<div class="gl"><div class="gr">${status({ ok: true, ms: 388, ctx: "128K" })}</div></div><div class="foot">已连接并设为使用中。快捷窗模型菜单已更新。</div><button class="btn" onclick="wizard={step:0,preset:null,base:'',key:'',model:'',models:[],test:null};render()">再添加一个</button>`;
+  const cards = providers.map((x) => `<div class="gr"><span class="dot ${x.test?.ok ? "" : x.test ? "err" : "off"}"></span>${esc(x.name)} <span style="color:var(--t3);font-size:12px">${esc(x.model)}</span><span class="v">${x.active ? `<span class="badge on">使用中</span>` : x.test?.ok ? `<button class="btn" onclick="activate(byId(${x.id}))">使用</button>` : `<button class="btn" onclick="sel=${x.id};variant='B';render()">修复…</button>`}</span></div>`).join("");
+  return `<div class="sside"><div class="lights"><i></i><i></i><i></i></div>${NAV}</div>
+  <div class="smain"><h4>模型</h4><div class="gl">${cards}</div>
+    <h4 style="font-size:13px;margin-top:16px">添加服务商</h4><div class="steps">${steps}</div>${body}</div>`;
+}
+
+// ---------------- 共用:快捷窗模型菜单 ----------------
+function renderMenu() {
+  const rows = providers.map((p) => {
+    const ok = canActivate(p);
+    return `<div class="h">${esc(p.name)}</div>` + [p.model].map((m) => `<div class="m ${ok ? "" : "dis"}" ${ok ? `onclick="activate(byId(${p.id}))"` : ""}>${p.active ? "✓" : "&nbsp;&nbsp;"} ${esc(m)}<span class="r">${p.active ? "使用中" : ok ? p.test.ms + " ms" : p.test ? "连接失败" : "未配置"}</span></div>`).join("");
+  }).join("");
+  document.getElementById("menu").innerHTML = rows + `<hr><div class="m">管理模型…<span class="r">⌘,</span></div>`;
+  document.getElementById("state").textContent = "state:\n" + providers.map((p) => `${p.active ? "*" : " "} ${p.name.padEnd(10)} key=${p.key ? "set" : "—"} model=${p.model} test=${p.test ? (p.test.busy ? "…" : p.test.ok ? "ok" : p.test.kind) : "none"}`).join("\n");
+}
+
+const VARIANTS = {
+  A: { name: "单页分组列表", render: renderA, note: "<b>A · 单页分组列表</b>:系统设置式单页,服务商用弹出按钮切换;字段改完即自动保存;「测试」用当前填写值;模型 = 可输入下拉 + 「拉取列表」按钮;地址下方实时显示最终请求 URL;只有测试通过的才能「设为使用中」。" },
+  B: { name: "服务商列表 + 详情", render: renderB, note: "<b>B · 列表 + 详情</b>:左列所有已配服务商一眼可见连通状态(绿/红/灰)与使用中;右侧详情自动保存,模型为纯下拉、点开即拉取;思考开关显式展示;删除在详情底部。" },
+  C: { name: "连接向导 + 已连接卡片", render: renderC, note: "<b>C · 连接向导</b>:顶部是已连接服务商清单(失败项给「修复…」);添加走 4 步向导:选服务商 → 粘贴密钥(自动验证)→ 从拉取到的模型里选(带推荐)→ 完成即设为使用中。Ollama 跳过密钥步。试试在密钥里输入 bad、地址里输入 xx。" },
+};
+const keys = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+let variant = keys.includes(params.get("variant")) ? params.get("variant") : "A";
+let dark = params.get("dark") === "1";
+function render() {
+  document.body.classList.toggle("dark", dark);
+  document.getElementById("settings").innerHTML = VARIANTS[variant].render();
+  document.getElementById("note").innerHTML = VARIANTS[variant].note;
+  document.getElementById("lbl").textContent = `${variant} — ${VARIANTS[variant].name} · ${dark ? "暗" : "亮"}`;
+  renderMenu();
+  const u = new URL(location.href); u.searchParams.set("variant", variant); u.searchParams.set("dark", dark ? "1" : "0"); history.replaceState(null, "", u);
+}
+const go = (d) => { variant = keys[(keys.indexOf(variant) + d + keys.length) % keys.length]; render(); };
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("theme").onclick = () => { dark = !dark; render(); };
+addEventListener("keydown", (e) => {
+  if (e.target.closest("input,textarea,select,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") go(-1); else if (e.key === "ArrowRight") go(1); else if (e.key.toLowerCase() === "t") { dark = !dark; render(); }
+});
+render();
+</script>
+</body>
+</html>

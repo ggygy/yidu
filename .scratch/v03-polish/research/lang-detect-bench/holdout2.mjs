@@ -1,0 +1,26 @@
+// 留出集 2:v2 / hybrid v2 定稿后编写,只跑一次,不再回调规则
+const F = "```";
+export const samples = [
+  { cat: "short", lang: "de", text: "Vielen Dank" },
+  { cat: "short", lang: "fr", text: "Au revoir" },
+  { cat: "short", lang: "es", text: "Buenos días" },
+  { cat: "short", lang: "en", text: "Good night" },
+  { cat: "short", lang: "zh", text: "保存失败" },
+  { cat: "short", lang: "ja", text: "おはよう" },
+  { cat: "mixed-tech", lang: "zh", text: `修改 \`tauri.conf.json\`:\n\n${F}json\n{ "app": { "windows": [{ "title": "Yidu", "width": 800 }] } }\n${F}\n\n保存后重启即可生效。` },
+  { cat: "mixed-tech", lang: "zh", text: "用 git rebase -i HEAD~3 合并最近三次提交" },
+  { cat: "mixed-tech", lang: "zh", text: "Rust 的 Arc<Mutex<T>> 在异步代码里要换成 tokio::sync::Mutex" },
+  { cat: "mixed-tech", lang: "en", text: "The function `解析` is exported from utils/parse.ts and returns a Result." },
+  { cat: "mixed-tech", lang: "ja", text: "`npm run dev` でローカルサーバーが起動します" },
+  { cat: "mixed-tech", lang: "ko", text: "`cargo test` 명령으로 테스트를 실행할 수 있습니다" },
+  { cat: "kanji-ja", lang: "ja", text: "横浜駅西口" },
+  { cat: "kanji-ja", lang: "ja", text: "厚生労働省" },
+  { cat: "kanji-ja", lang: "ja", text: "名古屋市立大学" },
+  { cat: "en-loanword", lang: "en", text: "The café on the corner serves great jalapeño bagels." },
+  { cat: "en-loanword", lang: "en", text: "He wore a blazer with a boutonnière to the soirée." },
+  { cat: "sentence", lang: "fr", text: "Cette fonctionnalité sera disponible dans la prochaine version." },
+  { cat: "sentence", lang: "de", text: "Diese Funktion wird in der nächsten Version verfügbar sein." },
+  { cat: "sentence", lang: "es", text: "Esta función estará disponible en la próxima versión." },
+  { cat: "sentence", lang: "ru", text: "Эта функция будет доступна в следующей версии." },
+  { cat: "sentence", lang: "zh", text: "我们在下一个版本中会加入这个功能。" },
+];

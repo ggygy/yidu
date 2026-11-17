@@ -1,0 +1,138 @@
+{
+  "ticket": "01",
+  "status": "partial_blocked",
+  "recorded_date": "2026-11-17",
+  "installed_app": {
+    "path": "/Applications/译读.app",
+    "version": "0.2.3",
+    "version_evidence": "CFBundleShortVersionString from installed Info.plist",
+    "launch_status": "process_started",
+    "ui_verified": false
+  },
+  "scope": {
+    "app_code_modified": false,
+    "rust_installed_by_this_session": false,
+    "provider_configuration_modified": false,
+    "mock_screenshots_used": false,
+    "screenshots_captured": 0
+  },
+  "blockers": [
+    "No computer-use API exposed in this session: computer is undefined in node_repl; request_access/list_apps/get_app_state tool names are unavailable.",
+    "Native screen capture failed: could not create image from display.",
+    "AppleScript window access failed: osascript is not allowed assistive access (-1728).",
+    "DeepSeek benchmark exited with code 1: missing DEEPSEEK_API_KEY in environment or proto/.env.local."
+  ],
+  "language_detection": {
+    "method": "Execute unchanged detectDir from Git commit 8c2a472 (v0.2.3), app/src/languages.ts, after TypeScript transpilation. These are function-level reproductions, not UI or translation API tests.",
+    "sample_scope": "Four targeted cases, including a Chinese prose control. Not a representative accuracy benchmark.",
+    "results": [
+      {
+        "id": "zh-prose-control",
+        "input": "在分布式系统中，客户端通过请求标识保证幂等性。服务端将结果写入缓存，并在超时后安全重试。下面的代码展示了异步请求和异常处理流程。",
+        "expected": "zh2en",
+        "actual": "zh2en",
+        "source_and_direction_match": true,
+        "target_match": true,
+        "cjk_count": 59,
+        "latin_count": 0
+      },
+      {
+        "id": "zh-technical-with-code",
+        "input": "在分布式系统中，客户端通过请求标识保证幂等性。服务端将结果写入缓存，并在超时后安全重试。下面的代码展示了异步请求和异常处理流程。\n\n```typescript\nexport async function fetchTranslationWithRetry(providerEndpoint: string, requestIdentifier: string, sourceMarkdownDocument: string): Promise<string> {\n  const maximumRetryAttempts = 3;\n  for (let currentAttempt = 0; currentAttempt < maximumRetryAttempts; currentAttempt++) {\n    const response = await fetch(providerEndpoint, { method: \"POST\", headers: { \"Content-Type\": \"application/json\", \"Idempotency-Key\": requestIdentifier }, body: JSON.stringify({ sourceMarkdownDocument }) });\n    if (response.ok) return await response.text();\n  }\n  throw new Error(\"Translation request exceeded maximum retry attempts\");\n}\n```",
+        "expected": "zh2en",
+        "actual": "en2zh",
+        "source_and_direction_match": false,
+        "target_match": false,
+        "cjk_count": 59,
+        "latin_count": 479
+      },
+      {
+        "id": "kanji-only-japanese",
+        "input": "東京駅",
+        "expected": "ja2zh",
+        "actual": "zh2en",
+        "source_and_direction_match": false,
+        "target_match": false,
+        "cjk_count": 3,
+        "latin_count": 0
+      },
+      {
+        "id": "english-with-cafe",
+        "input": "After reviewing the API documentation, we discussed the deployment plan at a café near the office.",
+        "expected": "en2zh",
+        "actual": "fr2zh",
+        "source_and_direction_match": false,
+        "target_match": true,
+        "cjk_count": 0,
+        "latin_count": 80
+      }
+    ]
+  },
+  "latency": {
+    "new_benchmark": {
+      "script": "/Users/temptrip/Desktop/code/open/yidu/.scratch/v03-polish/research/latency-bench/bench.mjs",
+      "runs_argument": 3,
+      "exit_code": 1,
+      "error": "缺少 DEEPSEEK_API_KEY(环境变量或 proto/.env.local)",
+      "requests_sent": 0,
+      "ttft_ms": null,
+      "first_paragraph_ms": null,
+      "total_ms": null
+    },
+    "historical_ada_requests": {
+      "method": "Read-only query of the installed app usage_log joined to providers, where provider name is ada and kind is translate. No secrets or article contents were exported.",
+      "scope": "Pre-existing records; not benchmark runs performed during this ticket. latency_ms is measured per provider request, including requests used by translation repair; it excludes pre-request provider/key initialization and is not end-to-end article or UI latency.",
+      "request_count": 21,
+      "min_ms": 657,
+      "median_ms": 4542,
+      "max_ms": 47998,
+      "prompt_tokens": 11238,
+      "completion_tokens": 16801,
+      "usage_ids_in_order": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21],
+      "latency_ms_in_id_order": [1122,1741,1533,840,4542,6421,8375,2293,4079,2208,12884,22567,4915,4642,47998,8158,2869,5861,1052,8423,657],
+      "ttft_ms": null,
+      "first_paragraph_ms": null,
+      "end_to_end_total_ms": null
+    }
+  },
+  "native_reproductions": {
+    "auto_detect_ui_screenshots": "not_run",
+    "markdown_nested_lists_table_hr_quotes": "not_run",
+    "provider_test_before_save": "not_run",
+    "provider_preset_without_key": "not_run",
+    "quick_window_cmd_w_then_option_t": "not_run",
+    "narrow_window_wrapping_and_serif": "not_run",
+    "short_text_streaming": "not_run"
+  },
+  "visual_screens": {
+    "quick_empty": "not_captured",
+    "quick_light": "not_captured",
+    "quick_side_by_side": "not_captured",
+    "main_dark": "not_captured",
+    "main_split": "not_captured",
+    "main_translation_only": "not_captured",
+    "main_plain": "not_captured",
+    "main_vocabulary_list": "not_captured",
+    "main_glossary": "not_captured"
+  },
+  "option_t_reliability": {
+    "attempts": 0,
+    "successes": 0,
+    "failures": 0,
+    "failure_rate": null,
+    "note": "No native shortcut attempts were made; do not report as 0% failures or 50/50 passes.",
+    "scenarios": {
+      "covered": "not_run",
+      "another_desktop": "not_run",
+      "full_screen_app": "not_run",
+      "after_closing": "not_run",
+      "after_unplugging_monitor": "not_run_requires_physical_monitor_action"
+    }
+  },
+  "resume_requirements": [
+    "Enable 操作电脑 in the desktop session via input + menu or Settings > 环境 > 操作电脑.",
+    "Grant screen recording and accessibility to 程小帮 and Chengxiaobang Computer Use following the settings prompt.",
+    "For a DeepSeek benchmark, provide the key through the benchmark environment without printing it; alternatively measure the configured ada provider through the real app once desktop control is available.",
+    "A physical monitor-unplug scenario requires user assistance; do not substitute an undisclosed simulation."
+  ]
+}

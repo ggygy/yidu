@@ -1,0 +1,22 @@
+first kanji call incl. charset build: 10.3 ms
+th=0.5: below=9/106 (wrong among them 5/10 of all wrong); precision above th = 92/97
+th=0.6: below=9/106 (wrong among them 5/10 of all wrong); precision above th = 92/97
+th=0.7: below=14/106 (wrong among them 5/10 of all wrong); precision above th = 87/92
+
+low-conf (<0.6) items:
+ en→en conf=0.28 "Hello"
+ en→en conf=0.28 "OK"
+ en→en conf=0.40 "Save changes"
+ fr→en conf=0.40 "Merci beaucoup"
+ fr→en conf=0.28 "Bonjour"
+ es→en conf=0.28 "Gracias"
+ de→en conf=0.40 "Guten Morgen"
+ de→en conf=0.40 "Vielen Dank"
+ en→en conf=0.28 "Good night"
+
+wrong with conf>=0.6:
+ ja→zh conf=1.00 "株式会社"
+ ja→zh conf=1.00 "人工知能研究所"
+ zh→en conf=0.77 "报错 TypeError: Cannot read prop"
+ ja→zh conf=1.00 "国土交通省"
+ ja→zh conf=1.00 "名古屋市立大学"

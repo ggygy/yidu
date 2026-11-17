@@ -1,0 +1,98 @@
+samples: 22  (short=6, mixed-tech=6, kanji-ja=3, en-loanword=2, sentence=5)
+
+approach | lang acc | target acc | und | short | mixed-tech | kanji-ja | en-loanword | sentence | µs/call
+current detectDir | 12/22 (55%) | 17/22 (77%) | 0 | 4/6 | 4/6 | 0/3 | 0/2 | 4/5 | 0.6
+improved heuristic | 20/22 (91%) | 21/22 (95%) | 0 | 5/6 | 6/6 | 2/3 | 2/2 | 5/5 | 4.5
+improved heuristic v2 | 20/22 (91%) | 21/22 (95%) | 0 | 5/6 | 6/6 | 2/3 | 2/2 | 5/5 | 4.1
+improved heuristic v2 (J1-restricted tables) | 20/22 (91%) | 21/22 (95%) | 0 | 5/6 | 6/6 | 2/3 | 2/2 | 5/5 | 4.1
+hybrid v2 + eld-S fallback | 21/22 (95%) | 21/22 (95%) | 0 | 6/6 | 6/6 | 2/3 | 2/2 | 5/5 | 3.6
+franc-min (only 8, raw) | 13/22 (59%) | 18/22 (82%) | 6 | 3/6 | 3/6 | 0/3 | 2/2 | 5/5 | 7.4
+franc-min (only 8, minLength 1, stripped) | 19/22 (86%) | 19/22 (86%) | 0 | 6/6 | 6/6 | 0/3 | 2/2 | 5/5 | 6.9
+eld-XS (subset 8, raw) | 20/22 (91%) | 21/22 (95%) | 0 | 6/6 | 6/6 | 2/3 | 1/2 | 5/5 | 4.4
+eld-XS (subset 8, stripped) | 20/22 (91%) | 21/22 (95%) | 0 | 6/6 | 6/6 | 2/3 | 1/2 | 5/5 | 4.4
+eld-S (subset 8, stripped) | 21/22 (95%) | 22/22 (100%) | 0 | 6/6 | 6/6 | 3/3 | 1/2 | 5/5 | 4.9
+hybrid heuristic+eld-XS | 20/22 (91%) | 21/22 (95%) | 0 | 6/6 | 6/6 | 2/3 | 1/2 | 5/5 | 7.2
+
+--- misses ---
+
+# current detectDir (10)
+  de→en  "Vielen Dank"
+  fr→en  "Au revoir"
+  zh→en  "修改 `tauri.conf.json`:\n\n```json\n{ \"app\": "
+  zh→en  "Rust 的 Arc<Mutex<T>> 在异步代码里要换成 tokio::sy"
+  ja→zh  "横浜駅西口"
+  ja→zh  "厚生労働省"
+  ja→zh  "名古屋市立大学"
+  en→fr  "The café on the corner serves great jala"
+  en→fr  "He wore a blazer with a boutonnière to t"
+  de→fr  "Diese Funktion wird in der nächsten Vers"
+
+# improved heuristic (2)
+  de→en  "Vielen Dank"
+  ja→zh  "名古屋市立大学"
+
+# improved heuristic v2 (2)
+  de→en  "Vielen Dank"
+  ja→zh  "名古屋市立大学"
+
+# improved heuristic v2 (J1-restricted tables) (2)
+  de→en  "Vielen Dank"
+  ja→zh  "名古屋市立大学"
+
+# hybrid v2 + eld-S fallback (1)
+  ja→zh  "名古屋市立大学"
+
+# franc-min (only 8, raw) (9)
+  fr→und  "Au revoir"
+  zh→und  "保存失败"
+  ja→und  "おはよう"
+  zh→fr  "修改 `tauri.conf.json`:\n\n```json\n{ \"app\": "
+  zh→de  "用 git rebase -i HEAD~3 合并最近三次提交"
+  zh→en  "Rust 的 Arc<Mutex<T>> 在异步代码里要换成 tokio::sy"
+  ja→und  "横浜駅西口"
+  ja→und  "厚生労働省"
+  ja→und  "名古屋市立大学"
+
+# franc-min (only 8, minLength 1, stripped) (3)
+  ja→zh  "横浜駅西口"
+  ja→zh  "厚生労働省"
+  ja→zh  "名古屋市立大学"
+
+# eld-XS (subset 8, raw) (2)
+  ja→zh  "横浜駅西口"
+  en→fr  "He wore a blazer with a boutonnière to t"
+
+# eld-XS (subset 8, stripped) (2)
+  ja→zh  "横浜駅西口"
+  en→fr  "He wore a blazer with a boutonnière to t"
+
+# eld-S (subset 8, stripped) (1)
+  en→fr  "He wore a blazer with a boutonnière to t"
+
+# hybrid heuristic+eld-XS (2)
+  ja→zh  "名古屋市立大学"
+  en→fr  "He wore a blazer with a boutonnière to t"
+
+--- improved heuristic v2 detail ---
+XX  de→en conf=0.40 latin:no-signal→en | "Vielen Dank"
+OK  fr→fr conf=0.70 latin:{"en":0,"fr":2,"de":0,"es":0} | "Au revoir"
+OK  es→es conf=1.00 latin:{"en":0,"fr":0,"de":0,"es":1.5} | "Buenos días"
+OK  en→en conf=0.28 latin:no-signal→en | "Good night"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=1 trad=0 | "保存失败"
+OK  ja→ja conf=1.00 kana-only | "おはよう"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=1 trad=0 | "修改 `tauri.conf.json`:\n\n```json"
+OK  zh→zh conf=0.71 han jaOnly=0 simp=0 trad=0 | "用 git rebase -i HEAD~3 合并最近三次提"
+OK  zh→zh conf=0.78 han jaOnly=0 simp=2 trad=0 | "Rust 的 Arc<Mutex<T>> 在异步代码里要换成"
+OK  en→en conf=1.00 latin:{"en":10,"fr":0,"de":0,"es":0} | "The function `解析` is exported "
+OK  ja→ja conf=1.00 kana 0.87 | "`npm run dev` でローカルサーバーが起動します"
+OK  ko→ko conf=1.00 hangul | "`cargo test` 명령으로 테스트를 실행할 수 있"
+OK  ja→ja conf=0.75 kanji jaOnly=1 | "横浜駅西口"
+OK  ja→ja conf=0.75 kanji jaOnly=2 | "厚生労働省"
+XX  ja→zh conf=1.00 han jaOnly=0 simp=1 trad=0 | "名古屋市立大学"
+OK  en→en conf=0.75 latin:{"en":6,"fr":0.75,"de":0,"es":3} | "The café on the corner serves "
+OK  en→en conf=0.91 latin:{"en":12,"fr":2.25,"de":0,"es":0} | "He wore a blazer with a bouton"
+OK  fr→fr conf=0.85 latin:{"en":0,"fr":6.75,"de":0,"es":2} | "Cette fonctionnalité sera disp"
+OK  de→de conf=0.80 latin:{"en":2,"fr":0,"de":5,"es":0} | "Diese Funktion wird in der näc"
+OK  es→es conf=0.71 latin:{"en":0,"fr":4,"de":0,"es":7} | "Esta función estará disponible"
+OK  ru→ru conf=1.00 cyrillic | "Эта функция будет доступна в с"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=5 trad=0 | "我们在下一个版本中会加入这个功能。"

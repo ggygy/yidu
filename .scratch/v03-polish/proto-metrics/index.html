@@ -1,0 +1,210 @@
+<!doctype html>
+<!--
+  PROTOTYPE — 一次性原型,勿并入 app/。
+  问题(工单 06):每次翻译展示哪些指标、放在哪、流式怎样「看得出在动」?按工单 12 macOS 原生 token。
+  ?variant=A|B|C,浮条 ← → 切换,T 亮暗,S 重放一次翻译,K 切换「思考开/关」(模拟模型开着思考)。
+  模拟时间线:连接 0.35s →(思考 3.2s)→ 首字 → 7 块逐块完成 → 结束。数据均为假数据。
+  指标口径来自工单 05:TTFT = 首个正文 token;首块 = 首个完整块;速度 = 输出 tok /(结束 − 首 token)。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>翻译指标原型</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --t1:#1d1d1f; --t2:#4c4c52; --t3:#6e6e73; --line:rgba(0,0,0,.1); --doc:#fff; --mat:rgba(240,240,244,.88); --accent:#0a7aff;
+  --ok:#1f9d3a; --warn:#b26a00; --bad:#d70015; --think:#8e5cd9; --net:#8a8f98; --gen:#0a7aff; --code:rgba(120,120,128,.12);
+  --f:-apple-system,"SF Pro Text","PingFang SC",sans-serif; --mono:"SF Mono",ui-monospace,Menlo,monospace; }
+body.dark { --t1:#f5f5f7; --t2:#c7c7cc; --t3:#98989f; --line:rgba(255,255,255,.12); --doc:#1e1e1e; --mat:rgba(44,44,48,.92); --accent:#0a84ff;
+  --ok:#32d74b; --warn:#ffb340; --bad:#ff453a; --think:#bf8cff; --net:#8e8e93; --gen:#0a84ff; --code:rgba(120,120,128,.24); }
+body { font: 13px/1.45 var(--f); color: var(--t1); background: linear-gradient(135deg,#6b8cce,#b48fd6 50%,#f2b5a0); min-height: 100vh; padding: 18px 18px 100px; }
+body.dark { background: linear-gradient(135deg,#23304d,#3d2c52 50%,#4d3330); }
+.note { max-width: 1240px; margin: 0 auto 14px; background: rgba(255,255,255,.78); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; line-height: 1.6; color: #2a2c33; }
+body.dark .note { background: rgba(0,0,0,.42); color: #e3e4e8; }
+.stage { display: flex; gap: 22px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+.cap { color: #fff; font-size: 11px; font-weight: 600; letter-spacing: .06em; margin: 0 0 8px 4px; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.win { background: var(--mat); backdrop-filter: blur(30px) saturate(1.6); border-radius: 12px; box-shadow: 0 22px 60px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.3); overflow: visible; position: relative; display: flex; flex-direction: column; }
+.tb { height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; border-bottom: .5px solid var(--line); flex: none; }
+.lights { display: flex; gap: 8px; } .lights i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; display: block; }
+.lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+.seg { display: flex; background: rgba(120,120,128,.16); border-radius: 7px; padding: 2px; font-size: 12px; font-weight: 500; }
+.seg span { padding: 3px 10px; border-radius: 5px; color: var(--t2); white-space: nowrap; } .seg span.on { background: var(--doc); color: var(--t1); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.doc { background: var(--doc); margin: 8px; border-radius: 8px; padding: 14px 16px; font-weight: 500; font-size: 15px; line-height: 1.75; overflow: auto; }
+.doc p + p { margin-top: .6em; }
+.cur { background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 4px; box-shadow: -6px 0 0 color-mix(in srgb, var(--accent) 9%, transparent), 6px 0 0 color-mix(in srgb, var(--accent) 9%, transparent); }
+.caret { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.pend { color: var(--t3); font-weight: 400; font-size: 13px; }
+.think { font-weight: 400; font-size: 12.5px; color: var(--think); background: color-mix(in srgb, var(--think) 10%, transparent); border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; cursor: pointer; }
+.think .tail { color: var(--t3); margin-top: 4px; font-size: 12px; line-height: 1.5; }
+.sb { min-height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 12px 8px; font-size: 11.5px; color: var(--t3); white-space: nowrap; flex: none; position: relative; }
+.sb .b { margin-left: auto; height: 22px; padding: 0 10px; border-radius: 6px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; font-size: 12px; }
+.sb .g { height: 22px; padding: 0 10px; border-radius: 6px; background: var(--doc); box-shadow: 0 .5px 1.5px rgba(0,0,0,.25); display: inline-flex; align-items: center; color: var(--t1); font-size: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+.m b { color: var(--t1); font-weight: 600; }
+.link { cursor: pointer; border-radius: 5px; padding: 2px 4px; margin-left: -4px; } .link:hover { background: rgba(120,120,128,.16); }
+.pop { position: absolute; left: 8px; bottom: 36px; width: 330px; background: var(--mat); backdrop-filter: blur(24px); border-radius: 10px; box-shadow: 0 14px 36px rgba(0,0,0,.35), 0 0 0 .5px rgba(0,0,0,.25); padding: 12px; color: var(--t1); z-index: 5; white-space: normal; }
+.tl { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 6px 0 4px; background: rgba(120,120,128,.18); }
+.tl i { display: block; height: 100%; }
+.leg { display: flex; gap: 10px; font-size: 11px; color: var(--t3); margin-bottom: 8px; } .leg span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; background: var(--c); }
+.kv { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; color: var(--t2); } .kv b { color: var(--t1); font-weight: 500; font-variant-numeric: tabular-nums; }
+.kv small { color: var(--t3); margin-left: 6px; }
+.phase { display: inline-flex; align-items: center; gap: 6px; }
+.phase .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.grade { display: inline-block; padding: 1px 6px; border-radius: 4px; font-weight: 600; color: #fff; background: var(--c); }
+.qw { width: 420px; }
+.qw .doc { height: 330px; }
+.mw { width: 760px; height: 470px; }
+.mw .body { flex: 1; display: grid; grid-template-columns: 1fr 230px; min-height: 0; }
+.mw .doc { margin: 0; border-radius: 0; height: 100%; }
+.insp { border-left: .5px solid var(--line); padding: 12px 14px; overflow: auto; }
+.insp h5 { font-size: 11px; color: var(--t3); font-weight: 600; margin: 10px 0 4px; } .insp h5:first-child { margin-top: 0; }
+.mini { font-size: 11.5px; color: var(--t3); display: inline-flex; gap: 8px; align-items: center; margin-left: auto; white-space: nowrap; }
+.pbar { width: 70px; height: 5px; border-radius: 3px; background: rgba(120,120,128,.2); overflow: hidden; } .pbar i { display: block; height: 100%; background: var(--accent); }
+.uw { width: 520px; }
+.uw .body { padding: 14px 16px 16px; background: var(--doc); border-radius: 0 0 12px 12px; }
+.uw h4 { font-size: 15px; margin-bottom: 10px; }
+table.u { width: 100%; border-collapse: collapse; font-size: 12px; } table.u th { text-align: left; color: var(--t3); font-weight: 500; padding: 4px 6px; border-bottom: .5px solid var(--line); }
+table.u td { padding: 5px 6px; border-bottom: .5px solid var(--line); font-variant-numeric: tabular-nums; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.card { background: rgba(120,120,128,.1); border-radius: 8px; padding: 8px 10px; } .card small { color: var(--t3); font-size: 11px; display: block; } .card b { font-size: 17px; font-variant-numeric: tabular-nums; }
+#switcher { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 99; display: flex; gap: 4px; align-items: center; background: #111; color: #fff; border-radius: 999px; padding: 6px; border: 2px dashed #f5c400; font: 500 13px var(--f); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#switcher button { white-space: nowrap; background: #2a2a2a; color: #fff; border: 0; border-radius: 999px; height: 32px; min-width: 32px; padding: 0 12px; cursor: pointer; font: inherit; }
+#switcher .lbl { padding: 0 14px; min-width: 240px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="note" id="note"></div>
+<div class="stage">
+  <div><div class="cap">快捷窗</div><div class="win qw" id="qw"></div></div>
+  <div><div class="cap">主窗 · 检查器展开</div><div class="win mw" id="mw"></div></div>
+  <div id="usageWrap"><div class="cap">设置 · 用量</div><div class="win uw" id="uw"></div></div>
+</div>
+<div id="switcher"><button id="prev">←</button><span class="lbl" id="lbl"></span><button id="next">→</button><button id="theme">亮/暗 T</button><button id="replay">重放 S</button><button id="thk">思考 K</button></div>
+<script>
+const PARAS = ["当服务端渲染的 HTML 与客户端首次渲染的结果不一致时,就会发生水合不匹配。", "React 会丢弃服务端标记并重新渲染,既耗时又会造成可见的闪烁。", "常见原因包括渲染期间读取 window、使用 Date.now() 这类不确定的值。", "以及在两次渲染之间不稳定的 key 属性。", "修复方式通常是把浏览器专属逻辑移到 useEffect 中。", "随机 id 应改用 useId() 生成。", "React 19 在开发模式下会报告具体不匹配的节点。"];
+const THINK_TAIL = "用户要把这段英文译成中文……先确认术语 hydration 译作「水合」,保持 window/document 不译……";
+const T_CONN = 350, T_THINK = 3200, T_PER = 260;
+let thinking = false, t0 = 0, raf = null, now = 0, popOpen = false, thinkOpen = false;
+const HISTORY = [
+  ["14:02", "glm-4.5-flash", 0.62, 1.9, 466, 153, 0], ["13:58", "glm-4.5-flash", 0.71, 2.3, 512, 190, 0], ["13:41", "deepseek-flash", 3.9, 6.1, 498, 1210, 1040],
+  ["13:30", "glm-4.5-flash", 0.58, 1.6, 402, 131, 0], ["11:12", "deepseek-flash", 0.81, 2.6, 610, 240, 0], ["10:05", "glm-4.5-flash", 0.66, 2.0, 455, 160, 0],
+];
+function timeline(t) {
+  const think = thinking ? T_THINK : 0, ttft = T_CONN + think, end = ttft + PARAS.length * T_PER;
+  const done = Math.max(0, Math.min(PARAS.length, Math.floor((t - ttft) / T_PER)));
+  const partialIdx = t >= ttft && done < PARAS.length ? done : -1;
+  const partialFrac = partialIdx >= 0 ? ((t - ttft) % T_PER) / T_PER : 0;
+  const phase = t < T_CONN ? "conn" : t < ttft ? "think" : t < end ? "gen" : "done";
+  const outTok = Math.round(Math.max(0, Math.min(t, end) - ttft) / T_PER * 22) + (thinking ? Math.round(Math.min(Math.max(t - T_CONN, 0), think) / 1000 * 330) : 0);
+  const reasonTok = thinking ? Math.round(Math.min(Math.max(t - T_CONN, 0), think) / 1000 * 330) : 0;
+  return { think, ttft, end, done, partialIdx, partialFrac, phase, outTok, reasonTok, firstBlock: ttft + T_PER, elapsed: Math.min(t, end) };
+}
+const s = (ms) => (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + "s";
+const grade = (ttft) => ttft < 1000 ? ["快", "var(--ok)"] : ttft < 3000 ? ["一般", "var(--warn)"] : ["慢", "var(--bad)"];
+function docHtml(x) {
+  let h = "";
+  if (thinking && x.phase !== "conn") {
+    const chars = Math.round(Math.min(now - T_CONN, x.think) / 1000 * 420);
+    const live = x.phase === "think";
+    if (live || thinkOpen) h += `<div class="think" onclick="thinkOpen=!thinkOpen;draw()">${live ? "◌ 思考中…" : "▸ 已思考"} ${chars.toLocaleString()} 字 · ${s(Math.min(now - T_CONN, x.think))}${thinkOpen ? `<div class="tail">${THINK_TAIL}</div>` : ""}</div>`;
+    else h += `<div class="think" onclick="thinkOpen=!thinkOpen;draw()">▸ 已思考 ${chars.toLocaleString()} 字 · ${s(x.think)}(点开查看)</div>`;
+  }
+  if (x.phase === "conn") h += `<p class="pend">正在连接 glm-4.5-flash…</p>`;
+  PARAS.forEach((p, i) => {
+    if (i < x.done) h += `<p>${p}</p>`;
+    else if (i === x.partialIdx) h += `<p><span class="cur">${p.slice(0, Math.max(1, Math.round(p.length * x.partialFrac)))}</span><span class="caret"></span></p>`;
+  });
+  if (x.phase === "gen" || x.phase === "think") h += `<p class="pend">还有 ${PARAS.length - x.done - (x.partialIdx >= 0 ? 1 : 0)} 块待译</p>`;
+  return h;
+}
+function breakdown(x) {
+  const tot = x.end, w = (ms) => (ms / tot * 100).toFixed(1) + "%";
+  const genTok = x.outTok - x.reasonTok, rate = Math.round(genTok / ((x.end - x.ttft) / 1000));
+  return `<div style="font-size:12px;font-weight:600">本次翻译 · ${s(x.end)}</div>
+    <div class="tl"><i style="width:${w(T_CONN)};background:var(--net)"></i>${thinking ? `<i style="width:${w(x.think)};background:var(--think)"></i>` : ""}<i style="width:${w(x.end - x.ttft)};background:var(--gen)"></i></div>
+    <div class="leg"><span style="--c:var(--net)">连接 ${s(T_CONN)}</span>${thinking ? `<span style="--c:var(--think)">思考 ${s(x.think)}</span>` : ""}<span style="--c:var(--gen)">生成 ${s(x.end - x.ttft)}</span></div>
+    <div class="kv">首字(TTFT)<b>${s(x.ttft)}</b></div><div class="kv">首块完成<b>${s(x.firstBlock)}</b></div>
+    <div class="kv">输入 / 输出<b>${(PARAS.length * 66).toLocaleString()} / ${x.outTok.toLocaleString()} tok${thinking ? `<small>其中思考 ${x.reasonTok}</small>` : ""}</b></div>
+    <div class="kv">生成速度<b>${rate} tok/s</b></div><div class="kv">估算成本<b>≈ ¥${((PARAS.length * 66 + x.outTok) * 2 / 1e6).toFixed(4)}</b></div>
+    <div class="kv">模型<b>glm-4.5-flash · 7 块 · 1 批</b></div>
+    ${thinking ? `<div style="margin-top:8px;font-size:11.5px;color:var(--think)">思考占用 ${Math.round(x.think / x.end * 100)}% 时间 → 设置里关闭思考可显著加快首字</div>` : ""}`;
+}
+
+// ---------------- 状态栏三种方案 ----------------
+function sbA(x) {
+  if (x.phase !== "done") return `<span class="num">${x.phase === "conn" ? "连接中…" : x.phase === "think" ? "思考中…" : `生成中 ${x.done}/${PARAS.length}`} · ${s(now)}</span>`;
+  return `<span class="link m num" onclick="popOpen=!popOpen;draw()">首字 <b>${s(x.ttft)}</b> · ${s(x.end)} · ${x.outTok} tok ⓘ</span>${popOpen ? `<div class="pop">${breakdown(x)}</div>` : ""}`;
+}
+function sbB(x) {
+  const ph = { conn: ["连接", "var(--net)"], think: ["思考", "var(--think)"], gen: ["生成", "var(--gen)"] }[x.phase];
+  if (ph) {
+    const rate = x.phase === "gen" ? ` · ${Math.round((x.outTok - x.reasonTok) / Math.max(0.1, (now - x.ttft) / 1000))} tok/s` : x.phase === "think" ? ` · ${x.reasonTok} tok` : "";
+    return `<span class="phase num" style="--c:${ph[1]}"><i class="dot"></i>${ph[0]}中 ${s(now)}${rate}</span>`;
+  }
+  return `<span class="num m">✓ <b>${s(x.end)}</b> · 首字 ${s(x.ttft)} · ${x.outTok} tok</span>`;
+}
+function sbC(x) {
+  if (x.phase !== "done") return `<span class="num">${x.phase === "gen" ? `${x.done}/${PARAS.length}` : "…"} · ${s(now)}</span>`;
+  const [g, c] = grade(x.ttft);
+  const med = 640, diff = x.ttft - med;
+  return `<span class="num m">首字 <span class="grade" style="--c:${c}">${s(x.ttft)} ${g}</span> ${Math.abs(diff) < 100 ? "与平时相当" : diff > 0 ? `比平时慢 ${s(diff)}` : `比平时快 ${s(-diff)}`}</span>`;
+}
+const SB = { A: sbA, B: sbB, C: sbC };
+
+function draw() {
+  const x = timeline(now);
+  document.getElementById("qw").innerHTML = `<div class="tb"><div class="lights"><i></i><i></i><i></i></div><div class="seg"><span class="on">译文</span><span>对照</span><span>原文</span></div></div>
+    <div class="doc">${docHtml(x)}</div><div class="sb">${SB[variant](x)}<span class="g">复制</span><span class="b">存入文章库</span></div>`;
+  const pct = Math.round(x.done / PARAS.length * 100);
+  const live = x.phase !== "done";
+  document.getElementById("mw").innerHTML = `<div class="tb"><div class="lights"><i></i><i></i><i></i></div><div class="seg"><span class="on">对照</span><span>分栏</span><span>译文</span></div>
+      <span class="mini">${live ? `<span class="pbar"><i style="width:${pct}%"></i></span>${x.done}/${PARAS.length} · ${s(now)}` : `首字 ${s(x.ttft)} · ${s(x.end)}`}</span><span style="color:var(--accent)">ⓘ</span></div>
+    <div class="body"><div class="doc">${docHtml(x)}</div><div class="insp">
+      ${variant === "B" && live ? `<h5>实时</h5><div class="kv">阶段<b>${{ conn: "连接", think: "思考", gen: "生成" }[x.phase]}</b></div><div class="kv">已用<b>${s(now)}</b></div><div class="kv">已出<b>${x.outTok} tok</b></div><div class="kv">块<b>${x.done}/${PARAS.length}</b></div>` : live ? `<h5>进度</h5><div class="kv">块<b>${x.done}/${PARAS.length}</b></div><div class="kv">已用<b>${s(now)}</b></div>` : breakdown(x)}
+      <h5>术语命中</h5><div class="kv">hydration<b>水合</b></div></div></div>`;
+  const showUsage = variant === "C" || variant === "A";
+  document.getElementById("usageWrap").style.display = "block";
+  const meds = variant === "C";
+  document.getElementById("uw").innerHTML = `<div class="tb"><div class="lights"><i></i><i></i><i></i></div><span style="font-weight:600">用量</span></div><div class="body">
+    <div class="cards"><div class="card"><small>本月请求</small><b>212</b></div><div class="card"><small>本月 token</small><b>98.4K</b></div><div class="card"><small>估算成本</small><b>¥0.20</b></div></div>
+    ${meds ? `<div class="cards"><div class="card"><small>glm-4.5-flash 首字中位</small><b>0.64s</b></div><div class="card"><small>deepseek-flash 首字中位</small><b>0.81s</b></div><div class="card"><small>开思考的请求</small><b style="color:var(--bad)">1 次 · 3.9s</b></div></div>` : ""}
+    <table class="u"><tr><th>时间</th><th>模型</th><th>首字</th><th>总耗时</th><th>输入/输出</th>${meds ? "<th>思考</th>" : ""}</tr>
+    ${HISTORY.map(([t, m, f, d, i, o, r]) => `<tr><td>${t}</td><td>${m}</td><td>${meds ? `<span class="grade" style="--c:${grade(f * 1000)[1]}">${f}s</span>` : f + "s"}</td><td>${d}s</td><td>${i}/${o}</td>${meds ? `<td>${r ? r + " tok" : "—"}</td>` : ""}</tr>`).join("")}</table></div>`;
+}
+function replay() { cancelAnimationFrame(raf); t0 = performance.now(); popOpen = false; const tick = () => { now = performance.now() - t0; draw(); if (now < timeline(now).end + 50) raf = requestAnimationFrame(tick); }; tick(); }
+
+const VARIANTS = {
+  A: { name: "一行摘要 + ⓘ 明细", note: "<b>A · 一行摘要 + ⓘ 明细</b>:进行中只显示阶段与计时;结束后状态栏一行「首字 · 总耗时 · 输出 tok ⓘ」,点开弹出明细:连接/思考/生成分段时间条、TTFT、首块、输入/输出(含思考)、速度、成本;主窗检查器展示同一份明细;设置「用量」= 月汇总 + 最近请求表。" },
+  B: { name: "实时阶段计时器", note: "<b>B · 实时阶段计时器</b>:强调「正在动」——状态栏带彩色呼吸点显示当前阶段(连接/思考/生成)+ 运行计时 + 实时 tok/s;结束后收成一行「✓ 总耗时 · 首字 · tok」;检查器进行中显示实时数据,结束后显示明细。" },
+  C: { name: "分级 + 与平时比较", note: "<b>C · 分级 + 与平时比较</b>:结束后只给首字一个分级色块(<1s 快 / 1–3s 一般 / >3s 慢)和「比平时快/慢 x 秒」(对比该模型最近 20 次中位数);设置「用量」增加各模型首字中位数与「开思考的请求」提示,历史表按分级着色。" },
+};
+const keys = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+let variant = keys.includes(params.get("variant")) ? params.get("variant") : "A";
+let dark = params.get("dark") === "1";
+function render() {
+  document.body.classList.toggle("dark", dark);
+  document.getElementById("note").innerHTML = VARIANTS[variant].note + `<br>按 S 重放一次翻译、K 切换模型「思考 ${thinking ? "开" : "关"}」(开时多 3.2s 思考,可点开查看思考尾部)。`;
+  document.getElementById("lbl").textContent = `${variant} — ${VARIANTS[variant].name} · ${dark ? "暗" : "亮"}`;
+  document.getElementById("thk").textContent = `思考${thinking ? "开" : "关"} K`;
+  const u = new URL(location.href); u.searchParams.set("variant", variant); u.searchParams.set("dark", dark ? "1" : "0"); history.replaceState(null, "", u);
+  draw();
+}
+const go = (d) => { variant = keys[(keys.indexOf(variant) + d + keys.length) % keys.length]; render(); replay(); };
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("theme").onclick = () => { dark = !dark; render(); };
+document.getElementById("replay").onclick = replay;
+document.getElementById("thk").onclick = () => { thinking = !thinking; render(); replay(); };
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (e.key === "ArrowLeft") go(-1); else if (e.key === "ArrowRight") go(1);
+  else if (k === "t") { dark = !dark; render(); } else if (k === "s") replay(); else if (k === "k") { thinking = !thinking; render(); replay(); }
+});
+render(); replay();
+</script>
+</body>
+</html>

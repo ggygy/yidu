@@ -1,0 +1,11 @@
+heuristic.mjs | raw 7 KB | gzip 3 KB
+lib/franc-min/data.js | raw 100 KB | gzip 46 KB
+lib/franc-min/index.js | raw 9 KB | gzip 2 KB
+vendor/franc/packages/franc/data.js | raw 233 KB | gzip 109 KB
+vendor/efficient-language-detector-js/src/ngrams/extrasmall.js | raw 931 KB | gzip 272 KB
+vendor/efficient-language-detector-js/src/ngrams/small.js | raw 1563 KB | gzip 440 KB
+vendor/efficient-language-detector-js/minified/eld.xs.min.js | raw 940 KB | gzip 279 KB
+eld extrasmall subset-8 (filtered ngrams, JSON) | raw 237 KB | gzip 60 KB
+eld extrasmall full (same JSON serialization, for comparison) | raw 1103 KB | gzip 274 KB
+eld small subset-8 (filtered ngrams, JSON) | raw 393 KB | gzip 94 KB
+eld small full (same JSON serialization, for comparison) | raw 1865 KB | gzip 442 KB

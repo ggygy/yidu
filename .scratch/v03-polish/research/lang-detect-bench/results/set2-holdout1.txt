@@ -1,0 +1,147 @@
+samples: 32  (short=8, mixed-tech=6, kanji-ja=4, en-loanword=3, sentence=11)
+
+approach | lang acc | target acc | und | short | mixed-tech | kanji-ja | en-loanword | sentence | µs/call
+current detectDir | 13/32 (41%) | 25/32 (78%) | 0 | 5/8 | 3/6 | 0/4 | 0/3 | 5/11 | 0.6
+improved heuristic | 26/32 (81%) | 29/32 (91%) | 0 | 5/8 | 5/6 | 3/4 | 3/3 | 10/11 | 4.0
+improved heuristic v2 | 27/32 (84%) | 30/32 (94%) | 0 | 5/8 | 5/6 | 3/4 | 3/3 | 11/11 | 3.7
+improved heuristic v2 (J1-restricted tables) | 27/32 (84%) | 30/32 (94%) | 0 | 5/8 | 5/6 | 3/4 | 3/3 | 11/11 | 3.5
+hybrid v2 + eld-S fallback | 30/32 (94%) | 30/32 (94%) | 0 | 8/8 | 5/6 | 3/4 | 3/3 | 11/11 | 3.5
+franc-min (only 8, raw) | 17/32 (53%) | 27/32 (84%) | 11 | 1/8 | 2/6 | 0/4 | 3/3 | 11/11 | 6.1
+franc-min (only 8, minLength 1, stripped) | 27/32 (84%) | 27/32 (84%) | 0 | 8/8 | 5/6 | 0/4 | 3/3 | 11/11 | 6.2
+eld-XS (subset 8, raw) | 27/32 (84%) | 27/32 (84%) | 1 | 7/8 | 4/6 | 2/4 | 3/3 | 11/11 | 3.7
+eld-XS (subset 8, stripped) | 27/32 (84%) | 27/32 (84%) | 2 | 7/8 | 4/6 | 2/4 | 3/3 | 11/11 | 4.2
+eld-S (subset 8, stripped) | 29/32 (91%) | 29/32 (91%) | 2 | 7/8 | 4/6 | 4/4 | 3/3 | 11/11 | 4.7
+hybrid heuristic+eld-XS | 27/32 (84%) | 29/32 (91%) | 0 | 6/8 | 5/6 | 3/4 | 3/3 | 10/11 | 9.0
+
+--- misses ---
+
+# current detectDir (19)
+  fr→en  "Bonjour"
+  es→en  "Gracias"
+  de→en  "Guten Morgen"
+  zh→en  "参考 [文档](https://tauri.app/v2/guide/) 配置 "
+  zh→en  "报错 TypeError: Cannot read properties of "
+  zh→en  "这个 PR 修复了 macOS 上 WKWebView 的 IME 问题"
+  ja→zh  "大阪駅前"
+  ja→zh  "国土交通省"
+  ja→zh  "総務省統計局"
+  ja→zh  "東京都庁"
+  en→fr  "She ordered a crème brûlée for dessert."
+  en→fr  "The fiancé arrived late to the dinner."
+  en→fr  "That song was the pièce de résistance of"
+  fr→en  "Je voudrais traduire ce document en chin"
+  fr→en  "Nous allons partir demain matin"
+  de→fr  "Ich möchte dieses Dokument ins Chinesisc"
+  de→en  "Wir treffen uns morgen um zehn Uhr"
+  es→en  "Quiero traducir este documento al chino."
+  es→en  "Vamos a la playa con los amigos"
+
+# improved heuristic (6)
+  fr→en  "Bonjour"
+  es→en  "Gracias"
+  de→en  "Guten Morgen"
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+  zh→ja  "王喆和李堃讨论了这个方案"
+
+# improved heuristic v2 (5)
+  fr→en  "Bonjour"
+  es→en  "Gracias"
+  de→en  "Guten Morgen"
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+
+# improved heuristic v2 (J1-restricted tables) (5)
+  fr→en  "Bonjour"
+  es→en  "Gracias"
+  de→en  "Guten Morgen"
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+
+# hybrid v2 + eld-S fallback (2)
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+
+# franc-min (only 8, raw) (15)
+  fr→und  "Bonjour"
+  es→und  "Gracias"
+  zh→und  "谢谢"
+  ja→und  "こんにちは"
+  ru→und  "Спасибо"
+  ko→und  "안녕하세요"
+  en→und  "Thank you"
+  zh→fr  "把 `config.json` 里的 `apiKey` 改成你自己的密钥"
+  zh→es  "参考 [文档](https://tauri.app/v2/guide/) 配置 "
+  zh→en  "报错 TypeError: Cannot read properties of "
+  zh→es  "这个 PR 修复了 macOS 上 WKWebView 的 IME 问题"
+  ja→und  "大阪駅前"
+  ja→und  "国土交通省"
+  ja→und  "総務省統計局"
+  ja→und  "東京都庁"
+
+# franc-min (only 8, minLength 1, stripped) (5)
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "大阪駅前"
+  ja→zh  "国土交通省"
+  ja→zh  "総務省統計局"
+  ja→zh  "東京都庁"
+
+# eld-XS (subset 8, raw) (5)
+  zh→und  "谢谢"
+  zh→en  "参考 [文档](https://tauri.app/v2/guide/) 配置 "
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+  ja→zh  "総務省統計局"
+
+# eld-XS (subset 8, stripped) (5)
+  zh→und  "谢谢"
+  zh→und  "参考 [文档](https://tauri.app/v2/guide/) 配置 "
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+  ja→zh  "総務省統計局"
+
+# eld-S (subset 8, stripped) (3)
+  zh→und  "谢谢"
+  zh→und  "参考 [文档](https://tauri.app/v2/guide/) 配置 "
+  zh→en  "报错 TypeError: Cannot read properties of "
+
+# hybrid heuristic+eld-XS (5)
+  fr→en  "Bonjour"
+  es→en  "Gracias"
+  zh→en  "报错 TypeError: Cannot read properties of "
+  ja→zh  "国土交通省"
+  zh→ja  "王喆和李堃讨论了这个方案"
+
+--- improved heuristic v2 detail ---
+XX  fr→en conf=0.28 latin:no-signal→en | "Bonjour"
+XX  es→en conf=0.28 latin:no-signal→en | "Gracias"
+XX  de→en conf=0.40 latin:no-signal→en | "Guten Morgen"
+OK  zh→zh conf=0.80 han jaOnly=0 simp=2 trad=0 | "谢谢"
+OK  ja→ja conf=1.00 kana-only | "こんにちは"
+OK  ru→ru conf=1.00 cyrillic | "Спасибо"
+OK  ko→ko conf=1.00 hangul | "안녕하세요"
+OK  en→en conf=0.70 latin:{"en":2,"fr":0,"de":0,"es":0} | "Thank you"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=1 trad=0 | "把 `config.json` 里的 `apiKey` 改成"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=2 trad=0 | "参考 [文档](https://tauri.app/v2/g"
+XX  zh→en conf=0.77 latin:{"en":2,"fr":0,"de":0,"es":0} | "报错 TypeError: Cannot read prop"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=4 trad=0 | "这个 PR 修复了 macOS 上 WKWebView 的 "
+OK  en→en conf=1.00 latin:{"en":6,"fr":0,"de":0,"es":0} | "Run `pnpm tauri build` to prod"
+OK  en→en conf=0.88 latin:{"en":4,"fr":0,"de":0,"es":0} | "Use the 中文 locale when testing"
+OK  ja→ja conf=0.75 kanji jaOnly=1 | "大阪駅前"
+XX  ja→zh conf=1.00 han jaOnly=0 simp=1 trad=0 | "国土交通省"
+OK  ja→ja conf=0.75 kanji jaOnly=1 | "総務省統計局"
+OK  ja→ja conf=0.75 kanji jaOnly=1 | "東京都庁"
+OK  en→en conf=0.69 latin:{"en":6,"fr":3.75,"de":0,"es":0} | "She ordered a crème brûlée for"
+OK  en→en conf=0.94 latin:{"en":6,"fr":0.75,"de":0,"es":0} | "The fiancé arrived late to the"
+OK  en→en conf=0.79 latin:{"en":10,"fr":4.25,"de":0,"es":2} | "That song was the pièce de rés"
+OK  fr→fr conf=0.75 latin:{"en":0,"fr":4,"de":0,"es":2} | "Je voudrais traduire ce docume"
+OK  fr→fr conf=1.00 latin:{"en":0,"fr":2,"de":0,"es":0} | "Nous allons partir demain mati"
+OK  de→de conf=1.00 latin:{"en":0,"fr":0,"de":5,"es":0} | "Ich möchte dieses Dokument ins"
+OK  de→de conf=1.00 latin:{"en":0,"fr":0,"de":2,"es":0} | "Wir treffen uns morgen um zehn"
+OK  es→es conf=1.00 latin:{"en":0,"fr":0,"de":0,"es":2} | "Quiero traducir este documento"
+OK  es→es conf=0.83 latin:{"en":2,"fr":2,"de":0,"es":6} | "Vamos a la playa con los amigo"
+OK  ru→ru conf=1.00 cyrillic | "Я хочу перевести этот документ"
+OK  ko→ko conf=1.00 hangul | "이 문서를 중국어로 번역하고 싶습니다."
+OK  ja→ja conf=1.00 kana 0.56 | "この文書を中国語に翻訳したいです。"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=0 trad=4 | "這個應用程式可以翻譯文件"
+OK  zh→zh conf=1.00 han jaOnly=0 simp=4 trad=0 | "王喆和李堃讨论了这个方案"
