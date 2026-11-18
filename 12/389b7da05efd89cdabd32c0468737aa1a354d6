@@ -1,0 +1,47 @@
+app/src-tauri/src/blocks.rs
+  s_078392dfaaf413::t_588b48fda4be3d 14-15,196-201,217-249,333-354
+app/src-tauri/src/db.rs
+  s_078392dfaaf413::t_87c38fb848a82e 732-733
+  s_078392dfaaf413::t_47eeab9536cb88 861
+  s_078392dfaaf413::t_f2d04c9dfa57bd 165-169,255-256,715-716,867
+app/src/settings/models.tsx
+  s_078392dfaaf413::t_3c13e4bdef2a91 93,267
+app/src/dirselect.tsx
+  s_078392dfaaf413::t_3c13e4bdef2a91 59,64
+app/src/settings/main.tsx
+  s_078392dfaaf413::t_3c13e4bdef2a91 94,175,264
+app/src/native.ts
+  s_078392dfaaf413::t_3c13e4bdef2a91 12-51,56,70
+app/src/reader.ts
+  s_078392dfaaf413::t_62ec39a00731e2 17,31-33
+app/src/providers.ts
+  s_078392dfaaf413::t_e8ea50065c11d6 9
+app/src/styles.css
+  s_078392dfaaf413::t_3c13e4bdef2a91 22,34-40,52,63-65,67-68,91-93,177,185,200,215-216,251,278
+  s_078392dfaaf413::t_62ec39a00731e2 259,262
+app/src-tauri/src/translate.rs
+  s_078392dfaaf413::t_87c38fb848a82e 408,431,538,548
+  s_078392dfaaf413::t_779c56f1ae9598 124-126,131-137
+app/src/quick/main.tsx
+  s_078392dfaaf413::t_3c13e4bdef2a91 456
+  s_078392dfaaf413::t_82af50f0bf677e 519-522,528-536,586
+app/src/main.tsx
+  s_078392dfaaf413::t_3c13e4bdef2a91 205,501,598,601,772
+  s_078392dfaaf413::t_053dc1bcf73105 514-515,524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "12389b7da05efd89cdabd32c0468737aa1a354d6",
+  "prompts": {},
+  "sessions": {
+    "s_078392dfaaf413": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c81f6b8-f1af-4ec5-ad4a-f54f2335a07d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
