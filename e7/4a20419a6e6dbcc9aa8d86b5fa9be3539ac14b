@@ -1,0 +1,21 @@
+.scratch/v03-polish/baseline/v03-acceptance.md
+  s_4c805c0bf8620c::t_92bcc961e94ec5 1-13,18-52,86-88,109-112,114-120,122-124,139-143
+  s_4c805c0bf8620c::t_341dcf19ec75a0 16-17,113,121
+  s_4c805c0bf8620c::t_69547be9b7bdee 14-15,53-85,89-108,125-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "e74a20419a6e6dbcc9aa8d86b5fa9be3539ac14b",
+  "prompts": {},
+  "sessions": {
+    "s_4c805c0bf8620c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2ecaccf5-05c8-4bfd-811b-9665ac45fed2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
