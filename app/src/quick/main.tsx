@@ -2,7 +2,8 @@ import { createRoot } from "react-dom/client";
 import { useEffect, useRef, useState } from "react";
 import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { Md, PassBlock } from "../md";
 import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "../blocks";
@@ -240,6 +241,26 @@ function QuickApp() {
     setPin(next);
   };
 
+  // 一键缩小为悬浮图标:翻译在后台照常进行;图标上转圈 = 翻译中,绿点 = 缩小期间已译完
+  const miniRef = useRef(false);
+  const doneWhileMini = useRef(false);
+  const pushMini = () => emitTo("quick-mini", "quick-mini-state", { busy: phase === "streaming", done: doneWhileMini.current }).catch(() => {});
+  const minimize = () => {
+    miniRef.current = true;
+    doneWhileMini.current = false;
+    invoke("quick_minimize").then(pushMini).catch((e) => setErr(String(e)));
+  };
+  useEffect(() => {
+    if (miniRef.current && phase === "done") doneWhileMini.current = true;
+    if (miniRef.current) pushMini();
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const ready = listen("quick-mini-ready", () => pushMini());
+    // 展开(点图标 / ⌥T / 托盘)后获焦:退出缩小态
+    const focus = w?.onFocusChanged(({ payload }) => { if (payload) { miniRef.current = false; doneWhileMini.current = false; } });
+    return () => { ready.then((f) => f()).catch(() => {}); focus?.then((f) => f()).catch(() => {}); };
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const clear = () => { setSrcOpen(true); setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); setLive(IDLE); setLastSrc(""); };
   const streaming = phase === "streaming";
 
@@ -374,6 +395,7 @@ function QuickApp() {
         <Segmented value={view} options={QVIEWS} onChange={setView} />
         {view === "pair" && <TbButton icon={sideBySide ? "cols" : "rows"} title={sideBySide ? "对照:左右两栏(点击改上下)" : "对照:上下(点击改左右两栏)"} onClick={() => setSideBySide(!sideBySide)} size={14} />}
         <span className="flex-1 self-stretch" data-tauri-drag-region />
+        <TbButton icon="minimize" title="缩小为图标(点图标或按唤出快捷键展开)" onClick={minimize} size={14} />
         <TbButton icon="pin" title={pin ? "置顶中(点击取消)" : "置顶窗口"} active={pin} onClick={togglePin} size={14} />
         <TbButton icon="win" title="打开主窗口" onClick={showMain} size={14} />
       </div>
