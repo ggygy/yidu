@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "tauri": "tauri",
-    "app": "npm install && tauri dev"
+    "app": "npm install && tauri dev",
+    "bench:lang": "node scripts/bench-langdetect.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

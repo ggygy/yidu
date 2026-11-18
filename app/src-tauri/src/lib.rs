@@ -257,6 +257,7 @@ pub fn run() {
             commands::provider_models,
             commands::provider_key_hint,
             commands::thinking_preview,
+            commands::reset_block,
             commands::lookup_word,
             commands::vocab_add,
             commands::vocab_list,

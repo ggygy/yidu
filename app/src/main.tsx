@@ -2,10 +2,11 @@ import { createRoot } from "react-dom/client";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { check as checkUpdateFn } from "@tauri-apps/plugin-updater";
-import { CodeBox, Md, type TermHit } from "./md";
+import { Md, PassBlock, type TermHit } from "./md";
+import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "./blocks";
 import { Icon } from "./icons";
 import * as api from "./api";
-import { dirLabel, langZh, splitDir, detectDir } from "./languages";
+import { dirLabel, langZh, splitDir, autoDirection } from "./languages";
 import { DirPicker } from "./dirselect";
 import { IS_MAC, initNative } from "./native";
 import { applyReading, stepScale } from "./reader";
@@ -229,6 +230,7 @@ function App() {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [draftFmt, setDraftFmt] = useState<"auto" | "md" | "plain">("auto"); // 原文格式(§2.2.5)
   const [panel, setPanel] = useState<Panel>(null);
   const [sideOpen, setSideOpen] = useLocalFlag("yidu-side", false); // 文章库侧栏:默认收起(☰ / ⌘K)
   const [inspOpen, setInspOpen] = useLocalFlag("yidu-insp", false); // 检查器:默认收起(ⓘ / ⌘I)
@@ -371,7 +373,7 @@ function App() {
     } else if (e.type === "block") {
       const { idx, text, terms } = e;
       setDoc((d) => d && d.article.id === streamArticleRef.current
-        ? { ...d, blocks: d.blocks.map((b) => (b.idx === idx ? { ...b, trans: text, status: "done", terms } : b)) }
+        ? { ...d, blocks: d.blocks.map((b) => (b.idx === idx ? { ...b, trans: text, status: "done", terms, format_warn: e.format_warn } : b)) }
         : d);
     } else if (e.type === "partial") {
       const { idx, text } = e;
@@ -392,11 +394,11 @@ function App() {
     if (!draft.trim()) return;
     setComposing(false);
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
-    const effDir = direction === "auto" ? detectDir(draft) : direction;
+    const effDir = direction === "auto" ? autoDirection(draft, prefs?.native_lang, prefs?.second_lang).dir : direction;
     try {
       setSessUsage(EMPTY_USAGE);
       setLive(startLive());
-      sessionRef.current = await api.translate({ text: draft, direction: effDir, kind: "md" }, onStreamEvent);
+      sessionRef.current = await api.translate({ text: draft, direction: effDir, kind: "md", format: draftFmt }, onStreamEvent);
       setDraft("");
       setStreamErr(null);
       markBusy(true);
@@ -424,6 +426,23 @@ function App() {
     markBusy(false);
     setLive((l) => ({ ...l, running: false }));
     say("已取消 · 未完成块可续译");
+  };
+
+  // 单元重译:清空该单元各块 → 续译(只剩它们待译)
+  const retryUnit = async (u: Unit) => {
+    if (!doc) return;
+    try {
+      for (const b of u.blocks) await api.resetBlock(doc.article.id, b.idx);
+      const ids = new Set(u.blocks.map((b) => b.idx));
+      const next = { ...doc, blocks: doc.blocks.map((b) => (ids.has(b.idx) ? { ...b, trans: "", status: "pending" as const, format_warn: "", terms: "" } : b)) };
+      setDoc(next);
+      if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
+      setSessUsage(EMPTY_USAGE);
+      setLive(startLive());
+      sessionRef.current = await api.translate({ text: "", article_id: doc.article.id, direction: doc.article.direction, kind: "resume" }, onStreamEvent);
+      setStreamErr(null);
+      markBusy(true);
+    } catch (e) { say(String(e)); }
   };
 
   const blocks = doc?.blocks ?? [];
@@ -463,17 +482,28 @@ function App() {
   };
 
   const En = ({ text, cls }: { text: string; cls?: string }) => (
-    <div className={"en md " + (cls ?? "text-[length:var(--en-size)] leading-[var(--en-line)]")}><Md text={text} onWord={(w, x, y) => setVocab({ word: w, x, y, sentence: text })} /></div>
+    <div className={"en md " + (cls ?? "text-[length:var(--en-size)] leading-[var(--en-line)]")}><Md text={text} defs={defs} onWord={(w, x, y) => setVocab({ word: w, x, y, sentence: text })} /></div>
   );
   const glossaryHits: TermHit[] = useMemo(() => glossary.filter((g) => g.enabled).map((g) => ({ from: g.term, to: g.translation })), [glossary]);
-  const Zh = ({ b }: { b: Block }) =>
-    b.trans ? (
-      <div className={"zh md" + (b.status === "streaming" ? " streaming" : "")}>
-        <Md text={b.trans} termHits={glossaryHits.length ? glossaryHits : undefined} onTerm={(t, x, y) => setTermPop({ hit: t, x, y })} />
-      </div>
-    ) : (
-      <p className="zh m-0 text-t3 !text-[13px]">{b.status === "streaming" ? <span className="caret" /> : "待译"}</p>
-    );
+  const units = useMemo(() => toUnits(blocks), [blocks]);
+  const defs = useMemo(() => linkDefs(blocks), [blocks]);
+  // 译文单元(组内未译完的项用原文占位,保持列表结构)+「格式可能有误 · 重译」
+  const ZhUnit = ({ u }: { u: Unit }) => (
+    <>
+      {u.translated ? (
+        <div className={"zh md" + (u.streaming ? " streaming" : "")}>
+          <Md text={u.trans} defs={defs} termHits={glossaryHits.length ? glossaryHits : undefined} onTerm={(t, x, y) => setTermPop({ hit: t, x, y })} />
+        </div>
+      ) : (
+        <p className="zh m-0 text-t3 !text-[13px]">{u.streaming ? <span className="caret" /> : "待译"}</p>
+      )}
+      {u.warn && !busy && (
+        <button className="self-start inline-flex items-center gap-1.5 h-[22px] px-2 rounded-md border-none bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] text-danger text-[11px]" title={`${u.warn}(已自动重译一次)`} onClick={() => retryUnit(u)}>
+          格式可能有误 · 重译
+        </button>
+      )}
+    </>
+  );
 
   const price = prefs?.price_per_mtok ?? 0;
 
@@ -535,7 +565,7 @@ function App() {
                         }}
                       ><Icon n="x" size={11} /></button>
                     </div>
-                    <div className="text-[11px] text-t3">{fmtDate(a.updated_at)} · {a.blocks_done === a.blocks_total ? "已译完" : `${a.blocks_done}/${a.blocks_total}`} · {a.kind === "md" ? "md" : "粘贴"}</div>
+                    <div className="text-[11px] text-t3">{fmtDate(a.updated_at)} · {a.blocks_done === a.blocks_total ? "已译完" : `${a.blocks_done}/${a.blocks_total}`} · {a.kind === "md" ? "md" : a.kind === "plain" ? "纯文本" : "粘贴"}</div>
                   </div>
                 </React.Fragment>
               ))}
@@ -575,7 +605,7 @@ function App() {
                 <div className="pb-1">
                   <h1 className="text-[28px] font-bold leading-[1.25] tracking-[-0.01em] m-0 selectable">{doc.article.title}</h1>
                   <div className="text-[12px] text-t3 mt-2 flex gap-2 flex-wrap items-center">
-                    <span>{doc.article.kind === "md" ? "md" : "粘贴"}</span>·
+                    <span>{doc.article.kind === "md" ? "md" : doc.article.kind === "plain" ? "纯文本" : "粘贴"}</span>·
                     <span>{dirLabel(doc.article.direction)}</span>·
                     <span>{doneCount}/{blocks.length} 块</span>·
                     <span>{fmtDate(doc.article.updated_at)}</span>
@@ -590,16 +620,16 @@ function App() {
                 </div>
               )}
 
-              {doc && view === "interleave" && blocks.map((b) =>
-                b.kind === "code" ? <CodeBox key={b.idx} src={b.src} /> : (
-                  <div key={b.idx} data-bidx={b.idx} className={"group relative flex flex-col gap-1.5 " + (b.terms ? "border-l-2 border-accent pl-3" : "")}>
+              {doc && view === "interleave" && units.map((u) =>
+                isPassthrough(u.kind) ? <div key={u.key} data-bidx={u.blocks[0].idx}><PassBlock kind={u.kind} src={u.src} /></div> : (
+                  <div key={u.key} data-bidx={u.blocks[0].idx} className={"group relative flex flex-col gap-1.5 " + (u.terms ? "border-l-2 border-accent pl-3" : "")}>
                     <button
-                      className={"absolute -right-7 top-0 tbtn !w-6 !h-6 text-[11px] " + (collapsed.has(b.idx) ? "" : "opacity-0 group-hover:opacity-100")}
-                      title={collapsed.has(b.idx) ? "展开原文" : "收起原文"}
-                      onClick={() => setCollapsed((s) => { const n = new Set(s); if (n.has(b.idx)) n.delete(b.idx); else n.add(b.idx); return n; })}
-                    >{collapsed.has(b.idx) ? "▸" : "▾"}</button>
-                    {!collapsed.has(b.idx) && <En text={b.src} />}
-                    <Zh b={b} />
+                      className={"absolute -right-7 top-0 tbtn !w-6 !h-6 text-[11px] " + (collapsed.has(u.blocks[0].idx) ? "" : "opacity-0 group-hover:opacity-100")}
+                      title={collapsed.has(u.blocks[0].idx) ? "展开原文" : "收起原文"}
+                      onClick={() => setCollapsed((s) => { const k = u.blocks[0].idx; const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; })}
+                    >{collapsed.has(u.blocks[0].idx) ? "▸" : "▾"}</button>
+                    {!collapsed.has(u.blocks[0].idx) && <En text={u.src} />}
+                    <ZhUnit u={u} />
                   </div>
                 ),
               )}
@@ -609,27 +639,27 @@ function App() {
                   <div className="grid grid-cols-2 gap-6 text-[11px] text-t3 font-semibold border-b-[0.5px] border-line pb-2">
                     <span>原文 · {langZh(splitDir(doc.article.direction)[0])}</span><span>译文 · {langZh(splitDir(doc.article.direction)[1])}</span>
                   </div>
-                  {blocks.map((b) =>
-                    b.kind === "code" ? <CodeBox key={b.idx} src={b.src} /> : (
-                      <div key={b.idx} data-bidx={b.idx} className="grid grid-cols-2 gap-6">
-                        <En text={b.src} />
-                        <Zh b={b} />
+                  {units.map((u) =>
+                    isPassthrough(u.kind) ? <div key={u.key} data-bidx={u.blocks[0].idx}><PassBlock kind={u.kind} src={u.src} /></div> : (
+                      <div key={u.key} data-bidx={u.blocks[0].idx} className="grid grid-cols-2 gap-6">
+                        <div className="min-w-0"><En text={u.src} /></div>
+                        <div className="min-w-0"><ZhUnit u={u} /></div>
                       </div>
                     ),
                   )}
                 </>
               )}
 
-              {doc && view === "zh" && blocks.map((b) =>
-                b.kind === "code" ? <CodeBox key={b.idx} src={b.src} /> : (
-                  <div key={b.idx} data-bidx={b.idx} className="group relative flex flex-col gap-1">
+              {doc && view === "zh" && units.map((u) =>
+                isPassthrough(u.kind) ? <div key={u.key} data-bidx={u.blocks[0].idx}><PassBlock kind={u.kind} src={u.src} /></div> : (
+                  <div key={u.key} data-bidx={u.blocks[0].idx} className="group relative flex flex-col gap-1">
                     <button
-                      className={"absolute -right-7 top-0 tbtn !w-6 !h-6 text-[11px] " + (expanded.has(b.idx) ? "" : "opacity-0 group-hover:opacity-100")}
-                      title={expanded.has(b.idx) ? "收起原文" : "查看原文"}
-                      onClick={() => setExpanded((s) => { const n = new Set(s); if (n.has(b.idx)) n.delete(b.idx); else n.add(b.idx); return n; })}
-                    >{expanded.has(b.idx) ? "▾" : "▸"}</button>
-                    <Zh b={b} />
-                    {expanded.has(b.idx) && <En text={b.src} />}
+                      className={"absolute -right-7 top-0 tbtn !w-6 !h-6 text-[11px] " + (expanded.has(u.blocks[0].idx) ? "" : "opacity-0 group-hover:opacity-100")}
+                      title={expanded.has(u.blocks[0].idx) ? "收起原文" : "查看原文"}
+                      onClick={() => setExpanded((s) => { const k = u.blocks[0].idx; const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; })}
+                    >{expanded.has(u.blocks[0].idx) ? "▾" : "▸"}</button>
+                    <ZhUnit u={u} />
+                    {expanded.has(u.blocks[0].idx) && <En text={u.src} />}
                   </div>
                 ),
               )}
@@ -673,6 +703,15 @@ function App() {
               <div className="h-[46px] flex-none flex items-center gap-2.5 px-4 border-t-[0.5px] border-line">
                 <span className="text-[11px] text-t3 whitespace-nowrap">{draft.length} 字</span>
                 <DirPicker value={direction} onChange={(d) => { setDirection(d); applyPrefs({ direction: d }); }} />
+                {direction === "auto" && draft.trim() && (() => {
+                  const a = autoDirection(draft, prefs?.native_lang, prefs?.second_lang);
+                  return (
+                    <span className="text-[11px] text-t3 whitespace-nowrap" title={a.low ? "识别把握不大:提示词只写目标语,由模型自行判断源语言" : `置信 ${Math.round(a.conf * 100)}%`}>
+                      {langZh(a.src)} → {langZh(a.to)}{a.low && " ?"}
+                    </span>
+                  );
+                })()}
+                <Segmented value={draftFmt} options={[["auto", "自动"], ["md", "Markdown"], ["plain", "纯文本"]] as const} onChange={setDraftFmt} />
                 <span className="flex-1" />
                 <button className="btn" onClick={() => setComposing(false)}>取消</button>
                 <button className="btn" onClick={() => fileRef.current?.click()}>导入 .md…</button>
@@ -690,9 +729,15 @@ function App() {
               <>
                 <div className="h-[5px] rounded-full bg-fill2 overflow-hidden"><i className="block h-full bg-accent transition-[width] duration-500" style={{ width: `${progress}%` }} /></div>
                 <KV k="块" v={`${doneCount} / ${blocks.length}`} />
-                <div className="flex gap-2 mt-2">
+                <div className="flex gap-2 mt-2 flex-wrap">
                   {busy ? <button className="btn" onClick={cancelCurrent}>取消翻译</button>
                     : pendingCount > 0 ? <button className="btn primary" onClick={resumeOrDone}>续译 {pendingCount} 块</button> : null}
+                  <button
+                    className="btn"
+                    title={doc.article.kind === "plain" ? "复制为纯文本" : "复制为 Markdown(保留列表 / 表格结构)"}
+                    disabled={!blocks.some((b) => b.trans && !isPassthrough(b.kind))}
+                    onClick={() => navigator.clipboard?.writeText(copyText(blocks, doc.article.kind)).then(() => say("译文已复制"))}
+                  >复制译文</button>
                 </div>
               </>
             ) : <p className="text-t3 m-0">未打开文章</p>}
@@ -705,7 +750,7 @@ function App() {
                 <KV k="输出" v={sessUsage.requests ? sessUsage.completion_tokens.toLocaleString() : "—"} />
               </>
             ) : live.metrics ? (
-              <MetricsDetail m={live.metrics} price={price} thinkTail={live.thinkTail} />
+              <MetricsDetail m={live.metrics} price={price} cachedPrice={prefs?.cached_price_per_mtok} thinkTail={live.thinkTail} />
             ) : (
               <>
                 <KV k="模型" v={activeProvider?.model ?? "未配置"} />

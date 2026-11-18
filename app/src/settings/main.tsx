@@ -7,8 +7,10 @@ import { check as checkUpdateFn } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import * as api from "../api";
 import { DirPicker } from "../dirselect";
+import { LANGS, langZh } from "../languages";
 import { initNative } from "../native";
 import { SCALE_MAX, SCALE_MIN, stepScale } from "../reader";
+import { estimateCost } from "../metrics";
 import { Group, Row, Segmented, Toggle, fmtTokens, prettyAccel } from "../ui";
 import { ModelsSection } from "./models";
 import type { HotkeyStatus, Prefs, Provider, UsageReport } from "../types";
@@ -124,6 +126,15 @@ function SettingsApp() {
 
 // ---------- 翻译(含外观) ----------
 
+function LangSelect({ value, exclude, onChange }: { value: string; exclude?: string; onChange: (v: string) => void }) {
+  return (
+    <select className="field !h-[24px] !text-[12px] !px-1.5" value={value} onChange={(e) => onChange(e.target.value)}>
+      {!LANGS.some((l) => l.code === value) && <option value={value}>{langZh(value)}</option>}
+      {LANGS.filter((l) => l.code !== exclude).map((l) => <option key={l.code} value={l.code}>{l.zh}</option>)}
+    </select>
+  );
+}
+
 function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPrefs: (u: Partial<Prefs>) => void; say: (m: string) => void }) {
   const [promptDraft, setPromptDraft] = useState("");
   useEffect(() => { setPromptDraft(prefs?.custom_prompt ?? ""); }, [prefs?.custom_prompt]);
@@ -132,8 +143,33 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
     <>
       <Group title="翻译">
         <Row label="默认方向"><DirPicker value={prefs?.direction ?? "en2zh"} onChange={(d) => applyPrefs({ direction: d })} /></Row>
+        <Row label="母语 / 第二语言">
+          <span className="text-t3 text-[12px] whitespace-nowrap">自动识别:母语原文 → 译第二语言,其余 → 译母语</span>
+          <span className="inline-flex items-center gap-1.5 flex-none">
+            <LangSelect value={prefs?.native_lang ?? "zh"} onChange={(v) => applyPrefs({ native_lang: v })} />
+            <span className="text-t3 text-[12px]">/</span>
+            <LangSelect value={prefs?.second_lang ?? "en"} exclude={prefs?.native_lang ?? "zh"} onChange={(v) => applyPrefs({ second_lang: v })} />
+          </span>
+        </Row>
         <Row label="点词查词">免费词典 → 模型兜底<Toggle on={!!prefs?.dict_fallback} onClick={() => applyPrefs({ dict_fallback: !prefs?.dict_fallback })} /></Row>
+        <Row label="长文分批">
+          <Segmented
+            value={prefs?.batch_mode ?? "cache"}
+            options={[["speed", "速度优先"], ["cache", "缓存优先"]] as const}
+            onChange={(m) => applyPrefs({ batch_mode: m })}
+          />
+        </Row>
+        {(prefs?.batch_mode ?? "cache") === "speed" && (
+          <Row label="并发批次" title="同时发出的请求数;首批始终单独先发。Ollama 本地恒为 1">
+            <Segmented value={String(prefs?.concurrency ?? 3) as "1" | "2" | "3"} options={[["1", "1"], ["2", "2"], ["3", "3"]] as const} onChange={(v) => applyPrefs({ concurrency: Number(v) })} />
+          </Row>
+        )}
       </Group>
+      <p className="gf !px-3 -mt-3 mb-4">
+        {(prefs?.batch_mode ?? "cache") === "speed"
+          ? "速度优先:每批独立请求、并行发出,长文最快;每次只有系统提示部分能命中服务商缓存。"
+          : "缓存优先:整篇作为一段对话逐批翻译,前面的批次原样带上,大部分输入命中服务商缓存(按缓存价计费),术语与语气也更连贯;批次串行,长文更慢。总成本是否更低取决于服务商的缓存单价,可在「用量」页对比。"}
+      </p>
       <Group
         title="翻译提示词"
         foot={<>留空 = 内置默认(英文)。支持 {"{from}"} / {"{to}"} 占位;标签协议与方向指令由应用自动附加。<button className="ml-2 border-none bg-transparent text-accent text-[11px] p-0" onClick={() => { setPromptDraft(""); applyPrefs({ custom_prompt: "" }); say("已恢复默认提示词"); }}>恢复默认</button></>}
@@ -239,7 +275,13 @@ function UsageSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setPrice(prefs?.price_per_mtok ? String(prefs.price_per_mtok) : ""); }, [prefs?.price_per_mtok]);
   const p = prefs?.price_per_mtok ?? 0;
-  const cost = rep && p ? ((rep.month_prompt + rep.month_completion) / 1_000_000) * p : null;
+  const cost = rep && p ? estimateCost(rep.month_prompt, rep.month_completion, rep.month_cached, p, prefs?.cached_price_per_mtok) : null;
+  const [cprice, setCprice] = useState("");
+  useEffect(() => { setCprice(prefs?.cached_price_per_mtok ? String(prefs.cached_price_per_mtok) : ""); }, [prefs?.cached_price_per_mtok]);
+  const saveCprice = () => {
+    const v = parseFloat(cprice);
+    applyPrefs({ cached_price_per_mtok: isNaN(v) ? 0 : v });
+  };
   const savePrice = () => {
     const v = parseFloat(price);
     applyPrefs({ price_per_mtok: isNaN(v) ? 0 : v });
@@ -265,8 +307,11 @@ function UsageSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
           </div>
         ))}
       </div>
-      {rep && rep.month_reasoning > 0 && (
-        <p className="gf !px-1 !pt-0 -mt-2 mb-3">本月输出中有 {fmtTokens(rep.month_reasoning)} tokens 是思考({Math.round((rep.month_reasoning / Math.max(1, rep.month_completion)) * 100)}%)。</p>
+      {rep && (rep.month_reasoning > 0 || rep.month_cached > 0) && (
+        <p className="gf !px-1 !pt-0 -mt-2 mb-3">
+          {rep.month_cached > 0 && <>本月输入中 {fmtTokens(rep.month_cached)} tokens 命中服务商缓存({Math.round((rep.month_cached / Math.max(1, rep.month_prompt)) * 100)}%)。</>}
+          {rep.month_reasoning > 0 && <>输出中有 {fmtTokens(rep.month_reasoning)} tokens 是思考({Math.round((rep.month_reasoning / Math.max(1, rep.month_completion)) * 100)}%)。</>}
+        </p>
       )}
 
       <Group title="各模型首字(最近 20 次中位数)" foot="首字 < 1s 快 · 1–3s 一般 · > 3s 慢。">
@@ -285,7 +330,7 @@ function UsageSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
           <table className="w-full text-[12px] tabular-nums border-collapse">
             <thead>
               <tr className="text-t3 text-[11px] text-left">
-                {["时间", "模型", "首字", "总耗时", "输入 / 输出", "思考"].map((h, i) => <th key={h} className={"font-medium px-3 py-2 " + (i >= 2 ? "text-right" : "")}>{h}</th>)}
+                {["时间", "模型", "首字", "总耗时", "输入 / 输出", "缓存", "思考"].map((h, i) => <th key={h} className={"font-medium px-3 py-2 " + (i >= 2 ? "text-right" : "")}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -296,18 +341,22 @@ function UsageSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
                   <td className={"px-3 py-1.5 text-right font-medium " + ttftCls(r.ttft_ms)}>{s1(r.ttft_ms)}</td>
                   <td className="px-3 py-1.5 text-right text-t2">{s1(r.latency_ms)}</td>
                   <td className="px-3 py-1.5 text-right text-t2 whitespace-nowrap">{r.prompt_tokens} / {r.completion_tokens}</td>
+                  <td className="px-3 py-1.5 text-right text-t3">{r.cached_tokens || "—"}</td>
                   <td className="px-3 py-1.5 text-right text-t3">{r.reasoning_tokens || "—"}</td>
                 </tr>
               ))}
-              {rep && !rep.recent.length && <tr><td colSpan={6} className="px-3 py-3 text-t3">还没有翻译记录</td></tr>}
+              {rep && !rep.recent.length && <tr><td colSpan={7} className="px-3 py-3 text-t3">还没有翻译记录</td></tr>}
             </tbody>
           </table>
         </div>
       </section>
 
-      <Group title="单价" foot="按输入 + 输出合计估算;不同模型单价不同时填一个平均值即可。">
+      <Group title="单价" foot="按输入 + 输出合计估算;命中服务商前缀缓存的输入按「缓存命中」单价算(未填按普通单价)。不同模型单价不同时填平均值即可。">
         <Row label="每 100 万 tokens(¥)">
           <input className="field w-[100px] text-right" placeholder="0" value={price} onChange={(e) => setPrice(e.target.value)} onBlur={savePrice} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+        </Row>
+        <Row label="缓存命中 · 每 100 万 tokens(¥)">
+          <input className="field w-[100px] text-right" placeholder="同上" value={cprice} onChange={(e) => setCprice(e.target.value)} onBlur={saveCprice} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
         </Row>
       </Group>
     </>

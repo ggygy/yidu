@@ -76,6 +76,7 @@ impl super::Provider for Ollama {
     async fn stream_chat(
         &self,
         system: &str,
+        history: &[(String, String)],
         user: &str,
         tx: UnboundedSender<SsePayload>,
         cancel: CancelCheck,
@@ -83,11 +84,8 @@ impl super::Provider for Ollama {
         let body = json!({
             "model": self.model,
             "stream": true,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": user },
-            ],
-            "options": { "num_ctx": num_ctx(&self.extra) },
+            "messages": super::chat_messages(system, history, user),
+            "options": { "num_ctx": num_ctx(&self.extra), "temperature": super::temperature_of(&self.extra) },
         });
         let timing = Timing::start();
         let mut stats = StreamStats::default();

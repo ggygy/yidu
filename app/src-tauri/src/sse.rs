@@ -8,7 +8,8 @@ pub enum SsePayload {
     /// 思考文本(`delta.reasoning_content` / `delta.reasoning` / Ollama `message.thinking`):
     /// 绝不进 `</t>` 状态机与译文;M1 仅用于计时埋点(首 reasoning)
     Reasoning(String),
-    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
+    /// cached_tokens:输入中命中服务商前缀缓存的部分(OpenAI / Qwen `prompt_tokens_details.cached_tokens`,DeepSeek `prompt_cache_hit_tokens`)
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64 },
     /// choices[0].finish_reason(stop/length 等,随最后一个内容 chunk 到达)
     Finish(String),
     Done,
@@ -78,7 +79,12 @@ fn parse_data_line(line: &str) -> Vec<SsePayload> {
             .pointer("/completion_tokens_details/reasoning_tokens")
             .and_then(|x| x.as_i64())
             .unwrap_or(0);
-        out.push(SsePayload::Usage { prompt_tokens: pt, completion_tokens: ct, reasoning_tokens: rt });
+        let cached = u
+            .pointer("/prompt_tokens_details/cached_tokens")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0)
+            .max(u.get("prompt_cache_hit_tokens").and_then(|x| x.as_i64()).unwrap_or(0));
+        out.push(SsePayload::Usage { prompt_tokens: pt, completion_tokens: ct, reasoning_tokens: rt, cached_tokens: cached });
     }
     out
 }
@@ -89,9 +95,33 @@ pub struct Tagged {
     pub text: String,
 }
 
-/// `</t>` 状态机:feed 每个内容 delta,返回凑齐的完整块
+/// `<t id="N">…</t>` 状态机:feed 每个内容 delta,返回凑齐的完整块。
+/// 宽容解析(模型偶尔不按原样输出):`id=1` / `id='1'` / 多余空格 / `</t >`,
+/// 以及把输入的 `<s id="N">` 回显成开标签(实测 claude-deepseek 会写 `<s id="2">译文</t>`)。
+/// `<t id>` 只认 `</t>` 闭合(译文里的 `<s>删除线</s>` 不截断);`<s id>` 认 `</s>` 或 `</t>`。
 pub struct TagStateMachine {
     buf: String,
+}
+
+fn open_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r#"<\s*([ts])\s+id\s*=\s*["'“”]?\s*(\d+)\s*["'“”]?\s*>"#).unwrap())
+}
+
+fn close_re(letter: &str) -> &'static regex::Regex {
+    static T: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static S: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    if letter == "s" {
+        S.get_or_init(|| regex::Regex::new(r"<\s*/\s*[st]\s*>").unwrap())
+    } else {
+        T.get_or_init(|| regex::Regex::new(r"<\s*/\s*t\s*>").unwrap())
+    }
+}
+
+/// 尾部可能是半个闭合标签的碎片(`<` `</` `</t` `< /`)
+fn tail_fragment_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"<\s*/?\s*[ts]?\s*$").unwrap())
 }
 
 impl TagStateMachine {
@@ -103,11 +133,14 @@ impl TagStateMachine {
         self.buf.push_str(delta);
         let mut out = Vec::new();
         loop {
-            let Some(close) = self.buf.find("</t>") else { break };
-            let seg = self.buf[..close].to_string();
-            self.buf = self.buf[close + 4..].to_string();
-            if let Some(t) = parse_open_tag(&seg) {
-                out.push(t);
+            let Some(c) = open_re().captures(&self.buf) else { break };
+            let (letter, id) = (c[1].to_string(), c[2].parse::<u32>().ok());
+            let open_end = c.get(0).unwrap().end();
+            let Some(close) = close_re(&letter).find(&self.buf[open_end..]) else { break };
+            let text = self.buf[open_end..open_end + close.start()].trim().to_string();
+            self.buf = self.buf[open_end + close.end()..].to_string();
+            if let Some(id) = id {
+                out.push(Tagged { id, text });
             }
         }
         out
@@ -115,33 +148,12 @@ impl TagStateMachine {
 
     /// 当前进行中块的预览(打字机):返回 (id, 已到文本)
     pub fn partial(&self) -> Option<(u32, String)> {
-        let open = self.buf.find("<t id=\"")?;
-        let after = &self.buf[open..];
-        let id_end = after[7..].find('"')? + 7;
-        let id: u32 = after[7..id_end].parse().ok()?;
-        let mut text = &after[id_end + 2..];
-        // 去掉尾部可能是半个 `</t>` 的碎片
-        for suffix in ["</t", "</", "<"] {
-            if let Some(stripped) = text.strip_suffix(suffix) {
-                text = stripped;
-                break;
-            }
-        }
+        let c = open_re().captures_iter(&self.buf).last()?;
+        let id: u32 = c[2].parse().ok()?;
+        let text = &self.buf[c.get(0)?.end()..];
+        let text = tail_fragment_re().replace(text, "");
         Some((id, text.to_string()))
     }
-
-    pub fn raw(&self) -> &str {
-        &self.buf
-    }
-}
-
-fn parse_open_tag(seg: &str) -> Option<Tagged> {
-    let open = seg.find("<t id=\"")?;
-    let after = &seg[open + 7..];
-    let id_end = after.find('"')?;
-    let id: u32 = after[..id_end].parse().ok()?;
-    let text = &after[id_end + 2..];
-    Some(Tagged { id, text: text.trim().to_string() })
 }
 
 #[cfg(test)]
@@ -165,7 +177,7 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                SsePayload::Usage { prompt_tokens: 10, completion_tokens: 5, reasoning_tokens: 0 },
+                SsePayload::Usage { prompt_tokens: 10, completion_tokens: 5, reasoning_tokens: 0, cached_tokens: 0 },
                 SsePayload::Done,
             ]
         );
@@ -190,7 +202,7 @@ mod tests {
             vec![
                 SsePayload::Delta("尾</t>".into()),
                 SsePayload::Finish("stop".into()),
-                SsePayload::Usage { prompt_tokens: 7, completion_tokens: 3, reasoning_tokens: 2 },
+                SsePayload::Usage { prompt_tokens: 7, completion_tokens: 3, reasoning_tokens: 2, cached_tokens: 0 },
             ]
         );
     }
@@ -236,5 +248,49 @@ mod tests {
         let mut m = TagStateMachine::new();
         let out = m.feed("废话<t id=\"1\">A</t>");
         assert_eq!(out, vec![Tagged { id: 1, text: "A".into() }]);
+    }
+
+    #[test]
+    fn tolerant_tag_variants() {
+        let mut m = TagStateMachine::new();
+        let out = m.feed("<t id=1>甲</t >\n<t id='2'>乙< /t>\n< t  id = \"3\" >丙</t>");
+        assert_eq!(out.iter().map(|t| (t.id, t.text.as_str())).collect::<Vec<_>>(), vec![(1, "甲"), (2, "乙"), (3, "丙")]);
+    }
+
+    #[test]
+    fn echoed_s_tags_accepted() {
+        let mut m = TagStateMachine::new();
+        let out = m.feed("<s id=\"1\">译文一</s>\n<s id=\"2\">译文二</s>");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1], Tagged { id: 2, text: "译文二".into() });
+    }
+
+    #[test]
+    fn strikethrough_inside_t_not_a_close() {
+        // 译文里的 <s>删除线</s> 不能截断 <t> 块
+        let mut m = TagStateMachine::new();
+        let out = m.feed("<t id=\"1\">保留 <s>旧</s> 新</t>");
+        assert_eq!(out, vec![Tagged { id: 1, text: "保留 <s>旧</s> 新".into() }]);
+    }
+
+    #[test]
+    fn sse_cached_tokens_both_shapes() {
+        let mut p = SseParser::new();
+        let out = p.feed("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":40,\"prompt_cache_hit_tokens\":256,\"prompt_cache_miss_tokens\":244}}\n");
+        assert_eq!(out, vec![SsePayload::Usage { prompt_tokens: 500, completion_tokens: 40, reasoning_tokens: 0, cached_tokens: 256 }]);
+        let out = p.feed("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":1024}}}\n");
+        assert_eq!(out, vec![SsePayload::Usage { prompt_tokens: 1200, completion_tokens: 9, reasoning_tokens: 0, cached_tokens: 1024 }]);
+    }
+
+    #[test]
+    fn mixed_s_open_t_close_real_reply() {
+        // 2026-11-17 ada / claude-deepseek-v4.1-flash 实际回复(debug_last_unparsed)
+        let raw = "<t id=\"1\">测试通过了。</t>\n<s id=\"2\">你粘贴的内容翻译得很干净。</t>\n<s id=\"3\">缓存也在正常工作。</t>\n<s id=\"5\">- 列表项一;\n- 列表项二 `\\`。</t>\n";
+        let mut m = TagStateMachine::new();
+        let ids: Vec<u32> = m.feed(raw).iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 5]);
+        // <t> 块里的删除线仍不截断
+        let mut m = TagStateMachine::new();
+        assert_eq!(m.feed("<t id=\"1\">a <s>b</s> c</t>")[0].text, "a <s>b</s> c");
     }
 }

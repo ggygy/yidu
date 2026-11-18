@@ -3,6 +3,7 @@
 //      + protocol 段(应用强制附加,保证 <s>/<t> 协议管线完整,用户不可移除)
 //      + 术语表段(有术语才出现)
 // 方向编码:A2B;A/B 为语言代码(zh/en/ja/ko/fr/de/es/ru)或 "~显示名"(自定义语言,如 en2~泰语)
+// v0.3 §2.1.6:A = "?" 表示源语言未知(自动识别低置信),prompt 只写「译成 {to}」,from 为空串
 
 pub fn direction_parts(direction: &str) -> (String, String) {
     let (a, b) = direction.split_once('2').unwrap_or(("en", "zh"));
@@ -10,6 +11,9 @@ pub fn direction_parts(direction: &str) -> (String, String) {
 }
 
 fn seg_name(seg: &str, fallback: &str) -> String {
+    if seg == "?" {
+        return String::new();
+    }
     if let Some(name) = seg.strip_prefix('~') {
         let t = name.trim();
         if !t.is_empty() {
@@ -35,20 +39,25 @@ fn lang_name(code: &str) -> Option<&'static str> {
 }
 
 fn default_style_prompt(from: &str, to: &str) -> String {
+    // 源语言未知(低置信):不写源语,避免错误源语误导模型
+    let role = if from.is_empty() {
+        format!("You are a professional technical-document translator. Translate the text into {to}.")
+    } else {
+        format!("You are a professional {from}→{to} technical-document translator.")
+    };
     format!(
-        "You are a professional {from}→{to} technical-document translator.\n\n\
+        "{role}\n\n\
          Style rules:\n\
          1. Translate faithfully and completely; do not add explanations, prefaces, or closing remarks.\n\
          2. Keep proper nouns and product names in the source language unless they have a well-established {to} translation.\n\
-         3. Punctuation follows {to} conventions.",
-        from = from,
-        to = to,
+         3. Punctuation follows {to} conventions.\n\
+         4. If a segment is already entirely written in {to}, output it unchanged.",
     )
 }
 
 fn protocol_block() -> &'static str {
     "Protocol (mandatory):\n\
-     - Input segments are wrapped as <s id=\"N\">…</s>. For every segment output exactly one <t id=\"N\">…</t> with the same id, in the same order; none may be missing.\n\
+     - Input segments are wrapped as <s id=\"N\">…</s>. For every segment output exactly one <t id=\"N\">…</t> with the same id, in the same order; none may be missing. Every output segment must open with <t id=\"N\"> — never with <s.\n\
      - Preserve Markdown structure exactly: heading levels, lists, bold/italic, links, tables, quotes, and blank-line layout.\n\
      - Never translate code blocks, inline code, URLs, file paths, commands, or variable names; keep them verbatim.\n\
      - Output the translated segments only — no explanations of any kind.\n\
@@ -57,7 +66,9 @@ fn protocol_block() -> &'static str {
 
 pub fn system_prompt(from: &str, to: &str, terms: &[(String, String)], custom: Option<&str>) -> String {
     let style = match custom.map(str::trim) {
-        Some(t) if !t.is_empty() => t.replace("{from}", from).replace("{to}", to),
+        Some(t) if !t.is_empty() => t
+            .replace("{from}", if from.is_empty() { "the source language" } else { from })
+            .replace("{to}", to),
         _ => default_style_prompt(from, to),
     };
     let mut s = style;
@@ -79,10 +90,49 @@ pub fn user_msg(title: &str, prev: Option<&str>, blocks: &[&str]) -> String {
     }
     s.push_str(&format!("\nTranslate the following {} segments:\n\n", blocks.len()));
     for (i, b) in blocks.iter().enumerate() {
-        s.push_str(&format!("<s id=\"{}\">{}</s>\n", i + 1, b));
+        s.push_str(&format!("<s id=\"{}\">{}</s>\n", i + 1, escape_protocol(b)));
     }
     // 与实测脚本一致:片段间以换行连接,结尾无额外空行
     s
+}
+
+/// 纯文本文章附加规则:保留换行;明显有结构时可还原成规范 Markdown;不得臆造结构
+pub fn plain_text_rule() -> &'static str {
+    "Plain-text input (mandatory):\n\
+     - These segments come from plain text, not Markdown. A trailing backslash at the end of a line marks a line break; a backslash before #, >, -, +, * or after a number (as in 1\\.) means that character is literal.\n\
+     - By default keep every line break exactly where the source has one, keeping the trailing backslash.\n\
+     - Only if a segment is clearly structured — e.g. consecutive lines that are obviously list items or steps, or a short standalone title line — you may output that segment as proper Markdown instead (a list, a numbered list, a heading), without backslashes.\n\
+     - Never invent structure that is not clearly present, and never merge or drop lines."
+}
+
+/// 连续对话的后续轮次:标题与上文已在前面的轮次里,只给待译片段(编号每轮从 1 开始)
+pub fn continue_msg(blocks: &[&str]) -> String {
+    let mut s = format!("Translate the following {} segments:\n\n", blocks.len());
+    for (i, b) in blocks.iter().enumerate() {
+        s.push_str(&format!("<s id=\"{}\">{}</s>\n", i + 1, escape_protocol(b)));
+    }
+    s
+}
+
+// ---------- 协议转义(§2.2.6) ----------
+// 源文里出现 `<s ` `</s>` `<t ` `</t>` 会打断 <s>/<t> 协议(状态机按 </t> 切块)→ 发送前转成 &lt;…,回收后还原
+
+fn proto_tag_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"<(/?[st])([\s>])").unwrap())
+}
+
+fn proto_esc_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"&lt;(/?[st])([\s>])").unwrap())
+}
+
+pub fn escape_protocol(s: &str) -> String {
+    proto_tag_re().replace_all(s, "&lt;$1$2").into_owned()
+}
+
+pub fn unescape_protocol(s: &str) -> String {
+    proto_esc_re().replace_all(s, "<$1$2").into_owned()
 }
 
 #[cfg(test)]
@@ -125,6 +175,18 @@ mod tests {
     }
 
     #[test]
+    fn unknown_source_only_names_target() {
+        let (from, to) = direction_parts("?2en");
+        assert_eq!(from, "");
+        assert_eq!(to, "English");
+        let s = system_prompt(&from, &to, &[], None);
+        assert!(s.starts_with("You are a professional technical-document translator. Translate the text into English."));
+        assert!(!s.contains("→"));
+        let c = system_prompt(&from, &to, &[], Some("Translate {from} into {to}."));
+        assert!(c.starts_with("Translate the source language into English."));
+    }
+
+    #[test]
     fn direction_parts_known_codes() {
         assert_eq!(direction_parts("zh2en"), ("Simplified Chinese".into(), "English".into()));
         assert_eq!(direction_parts("en2zh"), ("English".into(), "Simplified Chinese".into()));
@@ -147,5 +209,25 @@ mod tests {
         assert!(u.starts_with("Document title: Test (context only)\n"));
         assert!(u.contains("\nReference context (do NOT translate or output):\nprev text\n"));
         assert!(u.contains("\nTranslate the following 2 segments:\n\n<s id=\"1\">a</s>\n<s id=\"2\">b</s>\n"));
+    }
+
+    #[test]
+    fn protocol_escape_roundtrip() {
+        let raw = "Close the tag with </t> and open with <s id=\"1\"> in XML examples.";
+        let esc = escape_protocol(raw);
+        assert!(!esc.contains("</t>") && !esc.contains("<s "));
+        assert_eq!(unescape_protocol(&esc), raw);
+        // 无关标签不动
+        assert_eq!(escape_protocol("<span> <table> <th>"), "<span> <table> <th>");
+        let msg = user_msg("T", None, &[raw]);
+        assert_eq!(msg.matches("</s>").count(), 1, "只剩协议自己的 </s>");
+    }
+
+    #[test]
+    fn continue_turn_has_no_title_or_context() {
+        let m = continue_msg(&["Hello", "World"]);
+        assert!(m.starts_with("Translate the following 2 segments:"));
+        assert!(!m.contains("Document title") && !m.contains("Reference context"));
+        assert!(m.contains("<s id=\"2\">World</s>"));
     }
 }

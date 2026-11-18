@@ -22,9 +22,10 @@ use tokio::sync::mpsc;
 pub enum StreamEvent {
     /// 带上 article 行:主窗直接据此建文档,不再重拉(v0.2 重拉期间早到的 block/partial 被丢)
     Created { article_id: i64, article: ArticleRow, blocks: Vec<BlockRow> },
-    Block { idx: usize, text: String, terms: String },
+    /// format_warn:结构签名不一致(自动重译一次后仍不一致)时的说明,空 = 正常
+    Block { idx: usize, text: String, terms: String, format_warn: String },
     Partial { idx: usize, text: String },
-    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64 },
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64 },
     /// 阶段(§2.6.5):conn 连接 / think 思考 / gen 生成
     Phase { phase: String },
     /// 思考进度(思考关不掉时;≥100ms 节流):累计字数 + 末尾约 200 字。思考文本绝不进译文
@@ -49,6 +50,7 @@ pub struct SessionMetrics {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub reasoning_tokens: i64,
+    pub cached_tokens: i64,
     pub requests: i64,
     pub batches: i64,
     pub blocks: i64,
@@ -68,6 +70,9 @@ struct SessionMeter {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TranslateRequest {
+    /// "auto" | "md" | "plain"(§2.2.5;缺省 auto:按 md 语法密度判定)
+    #[serde(default)]
+    pub format: Option<String>,
     pub text: String,
     pub article_id: Option<i64>,
     pub direction: String,
@@ -78,16 +83,6 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub active: Arc<std::sync::atomic::AtomicU64>,
     pub counter: std::sync::atomic::AtomicU64,
-}
-
-fn kind_from_str(s: &str) -> BlockKind {
-    match s {
-        "heading" => BlockKind::Heading,
-        "list" => BlockKind::List,
-        "code" => BlockKind::Code,
-        "table" => BlockKind::Table,
-        _ => BlockKind::Paragraph,
-    }
 }
 
 pub async fn run(app: tauri::AppHandle, req: TranslateRequest, channel: Channel<StreamEvent>, session: u64) {
@@ -125,16 +120,21 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     let article_id = match req.article_id {
         Some(id) => id,
         None => {
-            let parsed = blocks::split_blocks(&req.text);
+            // 纯文本粘贴:段内单换行保留为硬换行、行首 md 记号转义(§2.2.5)
+            let plain = match req.format.as_deref() {
+                Some("plain") => true,
+                Some("md") => false,
+                _ => !blocks::looks_like_markdown(&req.text),
+            };
+            let text = if plain { blocks::plain_to_markdown(&req.text) } else { req.text.clone() };
+            let parsed = blocks::split_blocks(&text);
             if parsed.is_empty() {
                 return Err(anyhow!("没有可翻译的内容"));
             }
-            let title = blocks::derive_title(&req.text);
-            let rows: Vec<(String, String, String)> = parsed
-                .iter()
-                .map(|b| (b.kind.as_str().to_string(), b.src.clone(), b.hash.clone()))
-                .collect();
-            db.create_article_with_blocks(&title, &req.kind, &req.direction, &rows)?
+            let title = blocks::derive_title(&text);
+            // 纯文本文章记为 kind=plain:翻译时允许模型还原明显结构、复制时去掉 md 转义
+            let kind = if plain { "plain" } else { req.kind.as_str() };
+            db.create_article_with_blocks(&title, kind, &req.direction, &parsed)?
         }
     };
     let (article, all_blocks) = db.get_article(article_id)?;
@@ -155,15 +155,26 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
 
     let (from, to) = prompt::direction_parts(&req.direction);
     let stored = crate::commands::load_prefs(&db).map_err(|e| anyhow!(e))?;
-    let custom_prompt = crate::commands::effective_prefs(&stored).custom_prompt;
-    let system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
+    let eff_prefs = crate::commands::effective_prefs(&stored);
+    let custom_prompt = eff_prefs.custom_prompt.clone();
+    // 批次策略:缓存优先 = 连续对话、串行;速度优先 = 独立请求、并发(默认 3;Ollama 本地单卡恒 1)
+    let cache_mode = eff_prefs.batch_mode == "cache";
+    let concurrency = if prov_row.kind == "ollama" || cache_mode { 1 } else { eff_prefs.concurrency.clamp(1, 3) as usize };
+    let plain = db.get_article(article_id).map(|(a, _)| a.kind == "plain").unwrap_or(false);
+    let mut system = prompt::system_prompt(&from, &to, &terms, custom_prompt.as_deref());
+    if plain {
+        system.push_str("\n\n");
+        system.push_str(prompt::plain_text_rule());
+    }
 
     let block_vec: Vec<Block> = all_blocks
         .iter()
         .map(|b| Block {
-            kind: kind_from_str(&b.kind),
+            kind: BlockKind::from_str(&b.kind),
             src: b.src.clone(),
             hash: String::new(),
+            sep: b.sep.clone(),
+            group: b.group,
         })
         .collect();
     let batches = batch::make_batches(&block_vec, &pending, &req.direction);
@@ -184,11 +195,13 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
 
     let ctx = BatchCtx {
         meter: &meter,
+        convo: cache_mode.then(|| std::sync::Mutex::new(Convo { history: Vec::new(), chars: 0 })),
         provider_row: prov_row,
         db: &db,
         article_id,
         title,
         system,
+        plain,
         channel,
         cancel: cancelled,
         term_rules: terms
@@ -201,16 +214,47 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
             .collect(),
     };
 
-    let mut prev = String::new(); // 跨批上下文:上批末 1~2 块已译文
-    for b in &batches {
-        if ctx.cancelled() {
-            break;
+    // 跨批上下文:上批末 1~2 块。首批单独先发(压首块时间),其译文作下一批上下文;
+    // 并发时后续批的译文还没出来,改用前一批末 1~2 块的原文作上下文。
+    let items_of = |b: &Vec<(usize, &Block)>| -> Vec<(usize, String)> { b.iter().map(|(gi, blk)| (*gi, blk.src.clone())).collect() };
+    let tail2 = |v: Vec<String>| -> String { v.into_iter().rev().take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n\n") };
+    let mut prev = String::new();
+    let mut rest = batches.iter();
+    if let Some(first) = rest.next() {
+        let texts = ctx.translate_batch(&items_of(first), &prev, 0).await?;
+        prev = tail2(texts.into_iter().map(|(_, t)| t).collect());
+    }
+    let rest: Vec<&Vec<(usize, &Block)>> = rest.collect();
+    if concurrency <= 1 {
+        for b in rest {
+            if ctx.cancelled() {
+                break;
+            }
+            let texts = ctx.translate_batch(&items_of(b), &prev, 0).await?;
+            if !texts.is_empty() {
+                prev = tail2(texts.into_iter().map(|(_, t)| t).collect());
+            }
         }
-        let items: Vec<(usize, String)> = b.iter().map(|(gi, blk)| (*gi, blk.src.clone())).collect();
-        let texts = ctx.translate_batch(&items, &prev, 0).await?;
-        if !texts.is_empty() {
-            let tail: Vec<String> = texts.iter().rev().take(2).map(|(_, t)| t.clone()).collect::<Vec<_>>().into_iter().rev().collect();
-            prev = tail.join("\n\n");
+    } else if !rest.is_empty() && !ctx.cancelled() {
+        use futures_util::stream::{self, StreamExt};
+        let jobs: Vec<(Vec<(usize, String)>, String)> = rest
+            .iter()
+            .enumerate()
+            .map(|(k, b)| {
+                let ctx_text = if k == 0 { prev.clone() } else { tail2(rest[k - 1].iter().map(|(_, blk)| blk.src.clone()).collect()) };
+                (items_of(b), ctx_text)
+            })
+            .collect();
+        let mut futs = Vec::with_capacity(jobs.len());
+        for (items, p) in &jobs {
+            futs.push(ctx.translate_batch(items, p, 0));
+        }
+        let mut running = stream::iter(futs).buffer_unordered(concurrency);
+        while let Some(r) = running.next().await {
+            r?;
+            if ctx.cancelled() {
+                break;
+            }
         }
     }
 
@@ -226,13 +270,27 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
     Ok(())
 }
 
+/// 连续对话模式(「缓存优先」):整篇文章作为一段对话,每批 = 一轮 user / assistant;
+/// 前面的轮次原样保留 → 每次请求的前缀都与上一次相同 → 服务商前缀缓存几乎全部命中。
+struct Convo {
+    history: Vec<(String, String)>,
+    chars: usize,
+}
+
+/// 历史超过这么多字符(约 8k tokens)就重开一段对话(缓存重建一次)
+const CONVO_MAX_CHARS: usize = 24_000;
+
 struct BatchCtx<'a> {
     meter: &'a std::sync::Mutex<SessionMeter>,
+    /// Some = 缓存优先(连续对话,串行);None = 速度优先(独立请求,可并发)
+    convo: Option<std::sync::Mutex<Convo>>,
     provider_row: ProviderRow,
     db: &'a Db,
     article_id: i64,
     title: String,
     system: String,
+    /// 纯文本文章:结构签名只比 URL 与行内码(允许模型还原列表 / 标题)
+    plain: bool,
     channel: &'a Channel<StreamEvent>,
     cancel: CancelCheck,
     /// 译后自动替换规则(工单 06:程序校验替换 + chip 标记)
@@ -325,10 +383,27 @@ impl BatchCtx<'_> {
         (self.cancel)()
     }
 
+    /// 有正文但解析出的块比预期少:把原始输出打到终端并存 app_state(诊断协议不符)
+    fn log_unparsed(&self, out: &[Tagged], raw: &str, expected: usize) {
+        if out.len() >= expected || raw.trim().is_empty() {
+            return;
+        }
+        if expected == 1 && out.len() == 1 {
+            return;
+        }
+        let head: String = raw.chars().take(1200).collect();
+        eprintln!("[译读] 期望 {expected} 块,只解析出 {} 块。原始输出开头:\n{head}\n[译读] ---- 原始输出结束 ----", out.len());
+        let _ = self.db.set_state("debug_last_unparsed", raw);
+    }
+
     /// 一次 HTTP 请求结束:写 usage_log(含计时埋点)并推 usage 事件
     fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>) {
         if stats.thinking_unsupported {
             let _ = self.db.mark_provider_thinking_unsupported(self.provider_row.id);
+        }
+        // 被取消 / 什么都没产出的请求(粘贴即译时新粘贴顶替旧会话)不入用量表,免得拉低请求数与首字中位数
+        if stats.prompt_tokens == 0 && stats.completion_tokens == 0 && stats.first_content_ms.is_none() {
+            return;
         }
         let _ = self.db.insert_usage(&UsageRecord {
             provider_id: self.provider_row.id,
@@ -341,6 +416,7 @@ impl BatchCtx<'_> {
             first_block_ms,
             first_byte_ms: stats.first_byte_ms,
             reasoning_tokens: stats.reasoning_tokens,
+            cached_tokens: stats.cached_tokens,
             batch_blocks: items.len() as i64,
             batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
             model: self.provider_row.model.clone(),
@@ -350,6 +426,7 @@ impl BatchCtx<'_> {
             g.m.prompt_tokens += stats.prompt_tokens;
             g.m.completion_tokens += stats.completion_tokens;
             g.m.reasoning_tokens += stats.reasoning_tokens;
+            g.m.cached_tokens += stats.cached_tokens;
             g.m.requests += 1;
         }
         if stats.prompt_tokens > 0 || stats.completion_tokens > 0 {
@@ -357,21 +434,74 @@ impl BatchCtx<'_> {
                 prompt_tokens: stats.prompt_tokens,
                 completion_tokens: stats.completion_tokens,
                 reasoning_tokens: stats.reasoning_tokens,
+                cached_tokens: stats.cached_tokens,
             });
         }
     }
 
     /// 单次请求:流式上屏(partial 打字机 + 完成块即写库即推送),返回 (完整块, raw, 统计)
     async fn request(&self, items: &[(usize, String)], prev: &str) -> Result<(Vec<Tagged>, String, StreamStats)> {
+        self.request_with_note(items, prev, None).await
+    }
+
+    fn structure_diff(&self, src: &str, out: &str) -> Vec<String> {
+        if self.plain {
+            validate::structure_diff_relaxed(src, out)
+        } else {
+            validate::structure_diff(src, out)
+        }
+    }
+
+    /// 当前对话历史(速度优先模式恒空)
+    fn history(&self) -> Vec<(String, String)> {
+        self.convo.as_ref().map(|c| c.lock().unwrap().history.clone()).unwrap_or_default()
+    }
+
+    /// 本批的 user 消息:对话首轮带标题与参考上下文;后续轮次上文已在历史里,只放待译片段
+    fn batch_user(&self, items: &[(usize, String)], prev: &str, first_turn: bool) -> String {
         let sources: Vec<&str> = items.iter().map(|(_, s)| s.as_str()).collect();
-        let user = prompt::user_msg(&self.title, if prev.is_empty() { None } else { Some(prev) }, &sources);
+        if first_turn {
+            prompt::user_msg(&self.title, if prev.is_empty() { None } else { Some(prev) }, &sources)
+        } else {
+            prompt::continue_msg(&sources)
+        }
+    }
+
+    /// 一批完成:把(user, 规范化的 assistant 输出)追加进对话;超长则清空,下批重开
+    fn append_turn(&self, user: String, blocks: &[Tagged]) {
+        let Some(c) = &self.convo else { return };
+        let mut sorted: Vec<&Tagged> = blocks.iter().collect();
+        sorted.sort_by_key(|t| t.id);
+        let assistant: String = sorted
+            .iter()
+            .map(|t| format!("<t id=\"{}\">{}</t>", t.id, prompt::escape_protocol(&t.text)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut g = c.lock().unwrap();
+        g.chars += user.chars().count() + assistant.chars().count();
+        g.history.push((user, assistant));
+        if g.chars > CONVO_MAX_CHARS {
+            g.history.clear();
+            g.chars = 0;
+        }
+    }
+
+    /// note:结构签名不一致时附在用户消息末尾的修正说明(§2.2.4 带差异说明重译)
+    async fn request_with_note(&self, items: &[(usize, String)], prev: &str, note: Option<&str>) -> Result<(Vec<Tagged>, String, StreamStats)> {
+        let history = self.history();
+        let mut user = self.batch_user(items, prev, history.is_empty());
+        if let Some(n) = note {
+            user.push_str(&format!(
+                "\nYour previous translation of these segments broke the Markdown structure. Keep the structure identical to the source this time:\n{n}\n"
+            ));
+        }
         let provider = providers::build(&self.provider_row)?;
         let system = self.system.clone();
         let cancel = self.cancel.clone();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let t0 = Instant::now();
         let mut handle = tauri::async_runtime::spawn(async move {
-            provider.stream_chat(&system, &user, tx, cancel).await
+            provider.stream_chat(&system, &history, &user, tx, cancel).await
         });
 
         let mut machine = TagStateMachine::new();
@@ -397,6 +527,8 @@ impl BatchCtx<'_> {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
                     self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
+                    self.log_unparsed(&out, &raw, items.len());
+                    let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Ok(stats)) => {
@@ -405,6 +537,8 @@ impl BatchCtx<'_> {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
                     self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
+                    self.log_unparsed(&out, &raw, items.len());
+                    let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Err(e)) => return Err(e),
@@ -433,6 +567,22 @@ impl BatchCtx<'_> {
             let mut all = self.translate_batch(&items[..mid], prev, depth + 1).await?;
             all.extend(self.translate_batch(&items[mid..], prev, depth + 1).await?);
             return Ok(all);
+        }
+
+        // 多块请求一块都没解析出来(模型换了输出格式):重发整批多半同样失败 → 直接逐块单发
+        if blocks.is_empty() && items.len() > 1 && !raw.trim().is_empty() && !self.cancelled() {
+            eprintln!("[译读] {} 块的批次一块都没解析出,改为逐块单发", items.len());
+            for (k, item) in items.iter().enumerate() {
+                if self.cancelled() {
+                    break;
+                }
+                if let Ok((single, _, _)) = self.request(std::slice::from_ref(item), prev).await {
+                    if let Some(t) = single.into_iter().next() {
+                        blocks.push(Tagged { id: k as u32 + 1, text: t.text });
+                    }
+                }
+            }
+            raw = blocks.iter().map(|b| format!("<t id=\"{}\">{}</t>", b.id, b.text)).collect();
         }
 
         let sources: Vec<&str> = items.iter().map(|(_, s)| s.as_str()).collect();
@@ -467,9 +617,11 @@ impl BatchCtx<'_> {
                     .collect();
                 if !sub.is_empty() {
                     if let Ok((extra, _, _)) = self.request(&sub, prev).await {
+                        // 子请求里重新编号 1..n:映射回本批 id(v0.2 起此处误用子请求 id)
                         for t in extra {
-                            if !blocks.iter().any(|b| b.id == t.id) {
-                                blocks.push(t);
+                            let Some(&id) = missing.get((t.id as usize).wrapping_sub(1)) else { continue };
+                            if !blocks.iter().any(|b| b.id == id) {
+                                blocks.push(Tagged { id, text: t.text });
                             }
                         }
                         blocks.sort_by_key(|b| b.id);
@@ -494,7 +646,7 @@ impl BatchCtx<'_> {
                     let Some(item) = items.get((id as usize).wrapping_sub(1)) else { continue };
                     if let Ok((single, _, _)) = self.request(std::slice::from_ref(item), prev).await {
                         if let Some(t) = single.into_iter().next() {
-                            blocks.push(t);
+                            blocks.push(Tagged { id, text: t.text }); // 单发请求 id 恒为 1,映射回本批 id
                         }
                     }
                 }
@@ -503,10 +655,52 @@ impl BatchCtx<'_> {
             }
         }
 
+        // 结构签名(§2.2.4):不一致 → 带差异说明自动重译这些块一次 → 仍不一致保留译文并标「格式可能有误」
+        let mut warns: std::collections::HashMap<u32, String> = Default::default();
+        if !self.cancelled() {
+            let src_of = |id: u32| items.get((id as usize).wrapping_sub(1)).map(|(_, s)| s.as_str());
+            let bad: Vec<(u32, Vec<String>)> = blocks
+                .iter()
+                .filter_map(|t| {
+                    let d = self.structure_diff(src_of(t.id)?, &t.text);
+                    (!d.is_empty()).then_some((t.id, d))
+                })
+                .collect();
+            if !bad.is_empty() {
+                let sub: Vec<(usize, String)> = bad.iter().filter_map(|(id, _)| items.get((*id as usize).wrapping_sub(1)).cloned()).collect();
+                let note: String = bad
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (_, d))| format!("- segment {}: {}", k + 1, d.join("; ")))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let retry = self.request_with_note(&sub, prev, Some(&note)).await.ok().map(|(r, _, _)| r).unwrap_or_default();
+                for (k, (id, d0)) in bad.iter().enumerate() {
+                    let src = src_of(*id).unwrap_or("");
+                    match retry.iter().find(|r| r.id == k as u32 + 1) {
+                        Some(r) => {
+                            let d1 = self.structure_diff(src, &r.text);
+                            if let Some(b) = blocks.iter_mut().find(|b| b.id == *id) {
+                                b.text = r.text.clone();
+                            }
+                            if !d1.is_empty() {
+                                warns.insert(*id, validate::diff_summary_zh(&d1));
+                            }
+                        }
+                        None => {
+                            warns.insert(*id, validate::diff_summary_zh(d0));
+                        }
+                    }
+                }
+            }
+        }
+
         // 终值落库 + 推送(流式期间已推过的按 idx 覆盖)
         let mut result = Vec::new();
         for t in &blocks {
             let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
+            let warn = warns.get(&t.id).cloned().unwrap_or_default();
+            let _ = self.db.update_block_warn(self.article_id, *gi, &warn);
             let (text, hits) = apply_terms(&t.text, &self.term_rules);
             let terms_json = if hits.is_empty() {
                 String::new()
@@ -517,19 +711,41 @@ impl BatchCtx<'_> {
             if !terms_json.is_empty() {
                 let _ = self.db.update_block_terms(self.article_id, *gi, &terms_json);
             }
-            let _ = self.channel.send(StreamEvent::Block { idx: *gi, text: text.clone(), terms: terms_json });
+            let _ = self.channel.send(StreamEvent::Block { idx: *gi, text: text.clone(), terms: terms_json, format_warn: warn });
             result.push((*gi, text));
         }
+        // 连续对话:本批作为一轮写入历史(只记顶层批;length 减半的子批不入历史)
+        if depth == 0 && self.convo.is_some() && !blocks.is_empty() {
+            let first_turn = self.history().is_empty();
+            let user = self.batch_user(items, prev, first_turn);
+            self.append_turn(user, &blocks);
+        }
+
         // 梯度走完仍有缺失 → 报错但继续后面的批
         let done_ids: std::collections::HashSet<u32> = blocks.iter().map(|b| b.id).collect();
         let still_missing: Vec<u32> = expected.iter().copied().filter(|id| !done_ids.contains(id)).collect();
-        if !still_missing.is_empty() {
+        if !still_missing.is_empty() && !self.cancelled() {
             let _ = self.channel.send(StreamEvent::Error {
                 message: format!("本批 {} 块经修复仍未完成,已保留待译状态", still_missing.len()),
             });
         }
         Ok(result)
     }
+}
+
+/// 单块请求但回复里没有任何标签:整段回复(去掉零散标签)就是译文;补成标准 raw 以过校验
+fn single_fallback(out: Vec<Tagged>, raw: String, expected: usize) -> (Vec<Tagged>, String) {
+    if expected != 1 || !out.is_empty() || raw.trim().is_empty() {
+        return (out, raw);
+    }
+    static TAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let tag = TAG.get_or_init(|| regex::Regex::new(r#"<\s*/?\s*[ts](\s+id\s*=[^>]*)?\s*>"#).unwrap());
+    let text = prompt::unescape_protocol(tag.replace_all(&raw, "").trim());
+    if text.is_empty() {
+        return (out, raw);
+    }
+    let fixed = format!("<t id=\"1\">{text}</t>");
+    (vec![Tagged { id: 1, text }], fixed)
 }
 
 fn process_payload(
@@ -590,6 +806,8 @@ fn process_payload(
     }
     raw.push_str(&d);
     for t in machine.feed(&d) {
+        // 协议转义还原(§2.2.6):发送前把源文里的 <s / </s / <t / </t 转成 &lt;…
+        let t = Tagged { id: t.id, text: prompt::unescape_protocol(&t.text) };
         let Some((gi, _)) = items.get((t.id as usize).wrapping_sub(1)) else { continue };
         if first_block_ms.is_none() {
             *first_block_ms = Some(t0.elapsed().as_millis() as i64);
@@ -609,12 +827,12 @@ fn process_payload(
         if !terms_json.is_empty() {
             let _ = ctx.db.update_block_terms(ctx.article_id, *gi, &terms_json);
         }
-        let _ = ctx.channel.send(StreamEvent::Block { idx: *gi, text, terms: terms_json });
+        let _ = ctx.channel.send(StreamEvent::Block { idx: *gi, text, terms: terms_json, format_warn: String::new() });
         out.push(Tagged { id: t.id, text: t.text.clone() });
     }
     if let Some((id, text)) = machine.partial() {
         if let Some((gi, _)) = items.get((id as usize).wrapping_sub(1)) {
-            let _ = ctx.channel.send(StreamEvent::Partial { idx: *gi, text });
+            let _ = ctx.channel.send(StreamEvent::Partial { idx: *gi, text: prompt::unescape_protocol(&text) });
         }
     }
 }

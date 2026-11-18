@@ -110,7 +110,7 @@ mod tests {
     use crate::blocks::BlockKind;
 
     fn p(src: &str) -> Block {
-        Block { kind: BlockKind::Paragraph, src: src.into(), hash: String::new() }
+        Block { kind: BlockKind::Paragraph, src: src.into(), hash: String::new(), sep: String::new(), group: None }
     }
 
     fn sizes(b: &[Vec<(usize, &Block)>]) -> Vec<usize> {

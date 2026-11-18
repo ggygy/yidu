@@ -17,17 +17,16 @@ pub struct OpenAiCompatible {
     /// 关思考注入字段(None = 不注入)
     pub thinking: Option<super::thinking::ThinkingParam>,
     pub provider_id: i64,
+    /// v0.3 §2.2.7:默认 0.3,服务商 extra.temperature 可覆盖
+    pub temperature: f64,
 }
 
-fn request_body(model: &str, system: &str, user: &str, stream: bool, max_tokens: Option<i64>) -> Value {
+fn request_body(model: &str, system: &str, history: &[(String, String)], user: &str, stream: bool, max_tokens: Option<i64>, temperature: f64) -> Value {
     let mut body = json!({
         "model": model,
         "stream": stream,
-        "temperature": 1.0,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
+        "temperature": temperature,
+        "messages": super::chat_messages(system, history, user),
     });
     if stream {
         body["stream_options"] = json!({ "include_usage": true });
@@ -43,6 +42,7 @@ impl super::Provider for OpenAiCompatible {
     async fn stream_chat(
         &self,
         system: &str,
+        history: &[(String, String)],
         user: &str,
         tx: UnboundedSender<SsePayload>,
         cancel: CancelCheck,
@@ -52,7 +52,7 @@ impl super::Provider for OpenAiCompatible {
         let resp = super::send_stream_with_thinking(
             &chat_url(&self.base_url),
             Some(&self.api_key),
-            request_body(&self.model, system, user, true, None),
+            request_body(&self.model, system, history, user, true, None, self.temperature),
             self.thinking.clone(),
             self.provider_id,
             &timing,
@@ -73,10 +73,12 @@ impl super::Provider for OpenAiCompatible {
             for payload in sse.feed(&text) {
                 timing.observe(&payload, &mut stats);
                 match &payload {
-                    SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens } => {
+                    SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens } => {
                         stats.prompt_tokens = *prompt_tokens;
                         stats.completion_tokens = *completion_tokens;
                         stats.reasoning_tokens = *reasoning_tokens;
+                    stats.cached_tokens = *cached_tokens;
+                        stats.cached_tokens = *cached_tokens;
                     }
                     SsePayload::Finish(reason) => {
                         stats.finish_reason = Some(reason.clone());
@@ -92,10 +94,11 @@ impl super::Provider for OpenAiCompatible {
             let text = String::from_utf8_lossy(&utf8buf).into_owned();
             for payload in sse.feed(&text) {
                 timing.observe(&payload, &mut stats);
-                if let SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens } = &payload {
+                if let SsePayload::Usage { prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens } = &payload {
                     stats.prompt_tokens = *prompt_tokens;
                     stats.completion_tokens = *completion_tokens;
                     stats.reasoning_tokens = *reasoning_tokens;
+                    stats.cached_tokens = *cached_tokens;
                 }
                 let _ = tx.send(payload);
             }
@@ -108,7 +111,7 @@ impl super::Provider for OpenAiCompatible {
         let resp = shared_client()
             .post(chat_url(&self.base_url))
             .bearer_auth(&self.api_key)
-            .json(&request_body(&self.model, "You are a connectivity test.", "hi", false, Some(1)))
+            .json(&request_body(&self.model, "You are a connectivity test.", &[], "hi", false, Some(1), self.temperature))
             .send()
             .await?;
         let status = resp.status();

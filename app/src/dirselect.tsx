@@ -72,7 +72,7 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (d: st
   return (
     <span className="inline-flex items-center gap-1.5">
       <button
-        title="自动识别语言:中文→英,其余→中"
+        title="自动识别语言:母语原文 → 第二语言,其余 → 母语(设置里可改)"
         className="tbtn !w-6 !h-6"
         onClick={() => onChange("auto")}
       >

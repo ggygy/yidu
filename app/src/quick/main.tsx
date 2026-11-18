@@ -4,10 +4,11 @@ import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit, listen } from "@tauri-apps/api/event";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { CodeBox, Md } from "../md";
+import { Md, PassBlock } from "../md";
+import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "../blocks";
 import { Icon } from "../icons";
 import * as api from "../api";
-import { dirLabel, dirShort, detectDir } from "../languages";
+import { LANGS, autoDirection, autoLabel, dirLabel, dirShort, langShort, langZh, makeDir, targetFor } from "../languages";
 import { DirPicker } from "../dirselect";
 import { IS_MAC, initNative } from "../native";
 import { Segmented, TbButton } from "../ui";
@@ -29,6 +30,11 @@ function clipHash(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
   return String(h);
+}
+
+function useLocalFlagStr(key: string, init: string) {
+  const [v, setV] = useState(() => { try { return localStorage.getItem(key) ?? init; } catch { return init; } });
+  return [v, (n: string) => { try { localStorage.setItem(key, n); } catch { /* ignore */ } setV(n); }] as const;
 }
 
 function useLocalFlag(key: string, init: boolean) {
@@ -56,6 +62,7 @@ function QuickApp() {
   const docRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [onceDir, setOnceDir] = useState<string | null>(null); // 自动模式下「只改这一次」的方向(§2.1.5),新翻译清掉
   const [lastSrc, setLastSrc] = useState(""); // 上次翻译的原文:输入改了才把主按钮切回「翻译」
   const [expandProv, setExpandProv] = useState<number | null>(null); // 模型菜单里展开的服务商
   const [provModels, setProvModels] = useState<Record<number, string[] | "busy" | string>>({});
@@ -70,7 +77,10 @@ function QuickApp() {
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
   const active = providers.find((p) => p.is_active);
-  const outText = blocks.filter((b) => b.trans).map((b) => b.trans).join("\n\n");
+  // 复制 = 按原文分隔拼回的整篇 markdown(列表 / 引用 / 表格结构不散)
+  const [articleKind, setArticleKind] = useState<string>("");
+  const outText = blocks.some((b) => b.trans && !isPassthrough(b.kind)) ? copyText(blocks, articleKind) : "";
+  const [fmt, setFmt] = useLocalFlagStr("q-format", "auto"); // 原文格式:自动 / Markdown / 纯文本(§2.2.5)
 
   // 写 prefs(Rust 侧广播 prefs-changed,主窗 / 设置窗同步)
   const savePrefs = (u: Partial<Prefs>) => api.setPrefs(u).then((p) => { setPrefs(p); setDirection(p.direction); return p; });
@@ -137,11 +147,12 @@ function QuickApp() {
     setLive((l) => reduceLive(l, e));
     if (e.type === "created") {
       setArticleId(e.article_id); // 翻译即自动入库
+      setArticleKind(e.article.kind);
       setBlocks(e.blocks);
     } else if (e.type === "usage") {
       setUsage((u) => addUsage(u, e));
     } else if (e.type === "block") {
-      setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "done" } : b)));
+      setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "done", format_warn: e.format_warn } : b)));
     } else if (e.type === "partial") {
       setBlocks((bs) => bs.map((b) => (b.idx === e.idx ? { ...b, trans: e.text, status: "streaming" } : b)));
     } else if (e.type === "error") {
@@ -151,7 +162,7 @@ function QuickApp() {
     }
   };
 
-  const fire = async (text = input) => {
+  const fire = async (text = input, once: string | null = null) => {
     if (!text.trim()) return;
     autoGrowRef.current = true; // 新翻译恢复自动长高
     setSrcOpen(false);
@@ -164,9 +175,10 @@ function QuickApp() {
     setLive(startLive());
     setInfoOpen(false);
     setLastSrc(text);
-    const effDir = direction === "auto" ? detectDir(text) : direction;
+    setOnceDir(once);
+    const effDir = once ?? (direction === "auto" ? autoDirection(text, prefs?.native_lang, prefs?.second_lang).dir : direction);
     try {
-      sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste" }, onEvent);
+      sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste", format: fmt as "auto" | "md" | "plain" }, onEvent);
     } catch (e) {
       setPhase("idle");
       setLive(IDLE);
@@ -259,10 +271,18 @@ function QuickApp() {
   }, [dirOpen, provOpen, phase]);
 
   const autoDir = direction === "auto";
-  // 「自动(英语)→ 中文」:有输入时显示识别结果,否则只显示「自动」
+  // 「自动 · 中 → EN」,低置信加「?」;本次手改过则显示手改的方向(仍是自动)
+  const native = prefs?.native_lang ?? "zh", second = prefs?.second_lang ?? "en";
+  const autoInfo = autoDir && input.trim() ? autoDirection(input, native, second) : null;
+  const onceActive = autoDir && onceDir && input.trim() === lastSrc.trim() ? onceDir : null;
   const dirText = autoDir
-    ? input.trim() ? (() => { const [a, b] = dirLabel(detectDir(input)).split(" → "); return `自动(${a})→ ${b}`; })() : "自动识别"
+    ? onceActive ? `自动 · ${dirShort(onceActive)}(本次)` : autoInfo ? autoLabel(autoInfo) : "自动识别"
     : dirShort(direction);
+  /** 只改这一次:以该方向重译当前文本,保持自动(§2.1.5) */
+  const retranslateAs = (src: string) => {
+    setDirOpen(false);
+    if (input.trim()) fire(input, makeDir(src, targetFor(src, native, second)));
+  };
 
   // ---------- 自动长高(§2.5.1–3) ----------
   // 宽不动;高随内容(含流式)增长,220ms ease-out,上限 85% 屏高后内部滚动;清空缩回。
@@ -333,13 +353,19 @@ function QuickApp() {
   }, []);
 
   // 单块渲染:译文 / 原文 / 对照(窄宽对照 = 每块上原文下译文)
-  const zhOf = (b: Block) =>
-    b.trans ? (
-      <div className={"zh md" + (b.status === "streaming" ? " streaming" : "")}><Md text={b.trans} /></div>
-    ) : (
-      <p className="zh m-0 text-t3">{streaming ? <span className="caret" /> : "待译"}</p>
-    );
-  const enOf = (b: Block, extra = "") => <div className={"en md text-[length:var(--en-size)] leading-[var(--en-line)] " + extra}><Md text={b.src} /></div>;
+  const units = toUnits(blocks);
+  const defs = linkDefs(blocks);
+  const zhOf = (u: Unit) => (
+    <>
+      {u.translated ? (
+        <div className={"zh md" + (u.streaming ? " streaming" : "")}><Md text={u.trans} defs={defs} /></div>
+      ) : (
+        <p className="zh m-0 text-t3">{streaming ? <span className="caret" /> : "待译"}</p>
+      )}
+      {u.warn && <p className="m-0 mt-1 text-[11px] text-danger" title={u.warn}>格式可能有误(已自动重译一次)</p>}
+    </>
+  );
+  const enOf = (u: Unit, extra = "") => <div className={"en md text-[length:var(--en-size)] leading-[var(--en-line)] " + extra}><Md text={u.src} defs={defs} /></div>;
 
   return (
     <div className="relative flex flex-col h-screen overflow-hidden mat">
@@ -364,7 +390,45 @@ function QuickApp() {
           </button>
           {dirOpen && (
             <div className="menu absolute z-30 top-full mt-1 left-0 !p-2.5" onClick={(e) => e.stopPropagation()}>
-              <DirPicker value={direction} onChange={(d) => { setDirection(d); setDirOpen(false); savePrefs({ direction: d }).catch(() => {}); }} />
+              {autoDir ? (
+                <div className="w-[264px] flex flex-col text-[12px]">
+                  <p className="m-0 px-1 pb-1.5 text-t2">
+                    {autoInfo
+                      ? <>识别为 <b className="font-medium text-t1">{langZh(autoInfo.src)}</b>{autoInfo.low ? " · 把握不大(只告诉模型目标语)" : ` · 置信 ${Math.round(autoInfo.conf * 100)}%`}</>
+                      : "自动识别源语言:母语 → 第二语言,其余 → 母语"}
+                  </p>
+                  {autoInfo?.maybeJa && (
+                    <button onClick={() => retranslateAs("ja")}>
+                      <span className="w-3 flex-none" />可能是日文 → {langShort("ja")} → {langShort(targetFor("ja", native, second))} 重译
+                    </button>
+                  )}
+                  {input.trim() && (
+                    <>
+                      <p className="m-0 px-1 pt-1.5 pb-1 text-[11px] text-t3">本次按其他源语言重译(仍保持自动)</p>
+                      <div className="flex flex-wrap gap-1 px-1 pb-1.5">
+                        {LANGS.filter((l) => l.code !== (onceActive ? onceActive.split("2")[0] : autoInfo?.src)).map((l) => (
+                          <button key={l.code} className="!w-auto !h-[22px] !px-2 rounded-md bg-surface2" onClick={() => retranslateAs(l.code)}>
+                            {l.short} → {langShort(targetFor(l.code, native, second))}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <hr />
+                  <button
+                    title="退出自动,固定为一个方向"
+                    onClick={() => {
+                      const d = onceActive && !onceActive.startsWith("?") ? onceActive
+                        : autoInfo && !autoInfo.low ? autoInfo.dir : makeDir(second, native);
+                      setDirection(d); savePrefs({ direction: d }).catch(() => {});
+                    }}
+                  >
+                    <span className="w-3 flex-none" />改为固定方向…
+                  </button>
+                </div>
+              ) : (
+                <DirPicker value={direction} onChange={(d) => { setDirection(d); setDirOpen(false); savePrefs({ direction: d }).catch(() => {}); }} />
+              )}
             </div>
           )}
         </div>
@@ -452,6 +516,13 @@ function QuickApp() {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); fire(); }
           }}
         />
+        <div className="flex items-center justify-end -mt-1">
+          <button
+            className="border-none bg-transparent text-[11px] text-t3 hover:text-t1 px-1"
+            title="原文格式:自动按 Markdown 语法密度判定;纯文本 = 保留单换行、行首 # > 1. 不当作 Markdown"
+            onClick={() => setFmt(fmt === "auto" ? "md" : fmt === "md" ? "plain" : "auto")}
+          >{fmt === "auto" ? "格式:自动" : fmt === "md" ? "格式:Markdown" : "格式:纯文本"}</button>
+        </div>
       </div>
       )}
 
@@ -468,20 +539,20 @@ function QuickApp() {
         {err && <p className="text-danger text-[12px] bg-surface2 rounded-md px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && (
           <p className="text-t3 text-[12px] m-0">
-            {streaming ? <>连接中 <span className="caret" /></> : `译文将逐块流式显示,并自动存入文章库 · ${autoDir ? (input.trim() ? dirLabel(detectDir(input)) : "自动识别语言") : dirLabel(direction)}`}
+            {streaming ? <>连接中 <span className="caret" /></> : `译文将逐块流式显示,并自动存入文章库 · ${autoInfo ? dirLabel(makeDir(autoInfo.src, autoInfo.to)) : autoDir ? "自动识别语言" : dirLabel(direction)}`}
           </p>
         )}
-        {blocks.map((b) =>
-          b.kind === "code" ? (
-            <CodeBox key={b.idx} src={b.src} />
+        {units.map((u) =>
+          isPassthrough(u.kind) ? (
+            <PassBlock key={u.key} kind={u.kind} src={u.src} />
           ) : view === "src" ? (
-            <div key={b.idx}>{enOf(b)}</div>
+            <div key={u.key}>{enOf(u)}</div>
           ) : view === "pair" ? (
             sideBySide
-              ? <div key={b.idx} className="grid grid-cols-2 gap-x-4 items-start">{enOf(b, "min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(b)}</div></div>
-              : <div key={b.idx} className="flex flex-col gap-1">{enOf(b)}{zhOf(b)}</div>
+              ? <div key={u.key} className="grid grid-cols-2 gap-x-4 items-start">{enOf(u, "min-w-0 break-words")}<div className="min-w-0 border-l-[0.5px] border-line pl-4">{zhOf(u)}</div></div>
+              : <div key={u.key} className="flex flex-col gap-1">{enOf(u)}{zhOf(u)}</div>
           ) : (
-            <div key={b.idx}>{zhOf(b)}</div>
+            <div key={u.key}>{zhOf(u)}</div>
           ),
         )}
        </div>
@@ -506,7 +577,7 @@ function QuickApp() {
           : <button className={"btn " + (input.trim() !== lastSrc.trim() || !blocks.length ? "primary" : "")} disabled={!input.trim() || !active} onClick={() => fire()} title="⌘↩">{blocks.length && input.trim() === lastSrc.trim() ? "重新翻译" : "翻译"}</button>}
         {infoOpen && live.metrics && (
           <div className="menu absolute z-40 bottom-full mb-1 left-2 w-[280px] !p-3" onClick={(e) => e.stopPropagation()}>
-            <MetricsDetail m={live.metrics} price={prefs?.price_per_mtok} thinkTail={live.thinkTail} />
+            <MetricsDetail m={live.metrics} price={prefs?.price_per_mtok} cachedPrice={prefs?.cached_price_per_mtok} thinkTail={live.thinkTail} />
           </div>
         )}
       </div>

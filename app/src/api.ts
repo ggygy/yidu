@@ -19,12 +19,17 @@ export function deleteArticle(id: number): Promise<void> {
 }
 
 export function translate(
-  request: { text: string; article_id?: number | null; direction: string; kind: string },
+  request: { text: string; article_id?: number | null; direction: string; kind: string; format?: "auto" | "md" | "plain" },
   onEvent: (e: StreamEvent) => void,
 ): Promise<number> {
   const ch = new Channel<StreamEvent>();
   ch.onmessage = onEvent;
   return invoke<number>("translate", { request, onEvent: ch });
+}
+
+/** 单块重译:清空译文回到待译(随后发起续译) */
+export function resetBlock(articleId: number, idx: number): Promise<void> {
+  return invoke("reset_block", { articleId, idx });
 }
 
 export function cancelTranslate(session: number): Promise<void> {

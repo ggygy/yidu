@@ -216,7 +216,7 @@ async fn provider_fallback(word: &str, row: &ProviderRow) -> Result<Option<DictC
     // 非流式:收集全部 delta 拼接
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let handle = tauri::async_runtime::spawn(async move {
-        provider.stream_chat(system, &user, tx, std::sync::Arc::new(|| false)).await
+        provider.stream_chat(system, &[], &user, tx, std::sync::Arc::new(|| false)).await
     });
     let mut raw = String::new();
     while let Some(p) = rx.recv().await {
