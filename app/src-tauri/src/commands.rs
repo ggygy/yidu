@@ -353,7 +353,7 @@ pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
         },
         concurrency: p.concurrency.unwrap_or(3).clamp(1, 3),
         cached_price_per_mtok: p.cached_price_per_mtok.filter(|v| v.is_finite() && *v > 0.0),
-        batch_mode: if p.batch_mode.as_deref() == Some("cache") { "cache".into() } else { "speed".into() },
+        batch_mode: if p.batch_mode.as_deref() == Some("speed") { "speed".into() } else { "cache".into() },
     }
 }
 

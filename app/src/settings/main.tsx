@@ -136,19 +136,19 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
         <Row label="点词查词">免费词典 → 模型兜底<Toggle on={!!prefs?.dict_fallback} onClick={() => applyPrefs({ dict_fallback: !prefs?.dict_fallback })} /></Row>
         <Row label="长文分批">
           <Segmented
-            value={prefs?.batch_mode ?? "speed"}
+            value={prefs?.batch_mode ?? "cache"}
             options={[["speed", "速度优先"], ["cache", "缓存优先"]] as const}
             onChange={(m) => applyPrefs({ batch_mode: m })}
           />
         </Row>
-        {(prefs?.batch_mode ?? "speed") === "speed" && (
+        {(prefs?.batch_mode ?? "cache") === "speed" && (
           <Row label="并发批次" title="同时发出的请求数;首批始终单独先发。Ollama 本地恒为 1">
             <Segmented value={String(prefs?.concurrency ?? 3) as "1" | "2" | "3"} options={[["1", "1"], ["2", "2"], ["3", "3"]] as const} onChange={(v) => applyPrefs({ concurrency: Number(v) })} />
           </Row>
         )}
       </Group>
       <p className="gf !px-3 -mt-3 mb-4">
-        {(prefs?.batch_mode ?? "speed") === "speed"
+        {(prefs?.batch_mode ?? "cache") === "speed"
           ? "速度优先:每批独立请求、并行发出,长文最快;每次只有系统提示部分能命中服务商缓存。"
           : "缓存优先:整篇作为一段对话逐批翻译,前面的批次原样带上,大部分输入命中服务商缓存(按缓存价计费),术语与语气也更连贯;批次串行,长文更慢。总成本是否更低取决于服务商的缓存单价,可在「用量」页对比。"}
       </p>
