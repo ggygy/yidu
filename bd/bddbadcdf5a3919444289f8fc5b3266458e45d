@@ -1,0 +1,41 @@
+app/package.json
+  s_078392dfaaf413::t_dc9d31ce002014 10-11
+app/src/types.ts
+  s_078392dfaaf413::t_fe2d714ec5e0fe 118-119
+app/src-tauri/src/commands.rs
+  s_078392dfaaf413::t_46d860d632607c 294-295,315-316,332-339,369-374,436-440
+app/src/dirselect.tsx
+  s_078392dfaaf413::t_11c1fe46b0caff 75
+app/src/langdetect.ts
+  s_078392dfaaf413::t_63db128e3685af 1-123
+app/src-tauri/src/prompt.rs
+  s_078392dfaaf413::t_46d860d632607c 6,14-16,42-47,49,53,69-71
+  s_078392dfaaf413::t_019d6ddca52717 54,177-186
+app/src/main.tsx
+  s_078392dfaaf413::t_fe2d714ec5e0fe 9,397,706-713
+app/src/settings/main.tsx
+  s_078392dfaaf413::t_fe2d714ec5e0fe 10,129-137,146-153
+app/scripts/bench-langdetect.mjs
+  s_078392dfaaf413::t_dc9d31ce002014 1-37
+app/src/quick/main.tsx
+  s_078392dfaaf413::t_aa117e57066e20 11,65,165,178-179,274-277,279,281-285,393-431,542
+app/src/languages.ts
+  s_078392dfaaf413::t_91322cf1f87998 2,61,81,83
+  s_078392dfaaf413::t_b6f7fa8661fa4e 29,35,55-60,62-80,82,84-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "bdbddbadcdf5a3919444289f8fc5b3266458e45d",
+  "prompts": {},
+  "sessions": {
+    "s_078392dfaaf413": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c81f6b8-f1af-4ec5-ad4a-f54f2335a07d",
+        "model": "unknown"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
