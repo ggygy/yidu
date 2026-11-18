@@ -41,7 +41,7 @@ export type StreamEvent =
   | { type: "created"; article_id: number; article: Article; blocks: Block[] }
   | { type: "block"; idx: number; text: string; terms: string; format_warn: string }
   | { type: "partial"; idx: number; text: string }
-  | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number; cached_tokens: number }
+  | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number; cached_tokens: number; estimated?: boolean }
   | { type: "phase"; phase: Phase }
   | { type: "thinking"; chars: number; tail: string }
   | ({ type: "metrics" } & SessionMetrics)
@@ -186,6 +186,8 @@ export interface UsageRow {
   completion_tokens: number;
   reasoning_tokens: number;
   cached_tokens: number;
+  /** 服务商没报 usage,按字数估算 */
+  estimated?: boolean;
 }
 
 export interface UsageReport {

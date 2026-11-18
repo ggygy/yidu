@@ -167,6 +167,11 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         conn.execute_batch("ALTER TABLE usage_log ADD COLUMN sig_retry INTEGER NOT NULL DEFAULT 0;")?;
         conn.pragma_update(None, "user_version", 7)?;
     }
+    if version < 8 {
+        // v8:服务商没报 usage 时按字数估算的行(验收 F10;用量页标「≈」)
+        conn.execute_batch("ALTER TABLE usage_log ADD COLUMN usage_estimated INTEGER NOT NULL DEFAULT 0;")?;
+        conn.pragma_update(None, "user_version", 8)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -254,6 +259,8 @@ pub struct UsageRecord {
     pub model: String,
     /// 本请求是结构签名重译时,重译的块数(否则 0)
     pub sig_retry: i64,
+    /// token 数是按字数估算的(服务商没报 usage)
+    pub estimated: bool,
 }
 
 /// 用量页一行(最近请求)
@@ -268,6 +275,8 @@ pub struct UsageRow {
     pub completion_tokens: i64,
     pub reasoning_tokens: i64,
     pub cached_tokens: i64,
+    /// token 数为按字数估算(服务商没报 usage)
+    pub estimated: bool,
 }
 
 // ---------- 文章 ----------
@@ -712,8 +721,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO usage_log(provider_id, article_id, kind, prompt_tokens, completion_tokens, latency_ms,
-                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model, cached_tokens, sig_retry)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model, cached_tokens, sig_retry, usage_estimated)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 u.provider_id,
                 u.article_id,
@@ -730,7 +739,8 @@ impl Db {
                 now(),
                 u.model,
                 u.cached_tokens,
-                u.sig_retry
+                u.sig_retry,
+                u.estimated
             ],
         )?;
         Ok(())
@@ -776,7 +786,7 @@ impl Db {
     pub fn usage_recent(&self, n: i64) -> Result<Vec<UsageRow>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT u.created_at, u.model, COALESCE(p.name, ''), u.ttft_ms, u.latency_ms, u.prompt_tokens, u.completion_tokens, u.reasoning_tokens, u.cached_tokens
+            "SELECT u.created_at, u.model, COALESCE(p.name, ''), u.ttft_ms, u.latency_ms, u.prompt_tokens, u.completion_tokens, u.reasoning_tokens, u.cached_tokens, u.usage_estimated
              FROM usage_log u LEFT JOIN providers p ON p.id = u.provider_id
              WHERE u.kind='translate' ORDER BY u.id DESC LIMIT ?1",
         )?;
@@ -791,6 +801,7 @@ impl Db {
                 completion_tokens: r.get(6)?,
                 reasoning_tokens: r.get(7)?,
                 cached_tokens: r.get(8)?,
+                estimated: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -859,12 +870,13 @@ mod tests {
             model: "m".into(),
             cached_tokens: 0,
             sig_retry: 0,
+            estimated: false,
         })
         .unwrap();
         {
             let conn = db.conn.lock().unwrap();
             let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 7);
+            assert_eq!(v, 8);
             let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
                 .query_row(
                     "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",

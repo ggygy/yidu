@@ -340,7 +340,7 @@ function UsageSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
                   <td className="px-3 py-1.5 font-code text-[11px] truncate max-w-[140px]" title={r.provider}>{r.model || "—"}</td>
                   <td className={"px-3 py-1.5 text-right font-medium " + ttftCls(r.ttft_ms)}>{s1(r.ttft_ms)}</td>
                   <td className="px-3 py-1.5 text-right text-t2">{s1(r.latency_ms)}</td>
-                  <td className="px-3 py-1.5 text-right text-t2 whitespace-nowrap">{r.prompt_tokens} / {r.completion_tokens}</td>
+                  <td className="px-3 py-1.5 text-right text-t2 whitespace-nowrap" title={r.estimated ? "服务商未返回用量,按字数估算" : undefined}>{r.estimated ? "≈ " : ""}{r.prompt_tokens} / {r.completion_tokens}</td>
                   <td className="px-3 py-1.5 text-right text-t3">{r.cached_tokens || "—"}</td>
                   <td className="px-3 py-1.5 text-right text-t3">{r.reasoning_tokens || "—"}</td>
                 </tr>
