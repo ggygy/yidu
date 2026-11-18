@@ -6,7 +6,7 @@ import {
   PRESETS, THINKING_FORMATS, THINKING_MODES, cachedModels, thinkingOf, clearTest, fetchModels, parseExtra, runTest, testState, uniqueName,
   type TestState,
 } from "../providers";
-import { ConfirmCard, Segmented } from "../ui";
+import { ConfirmCard, Segmented, Toggle } from "../ui";
 import type { Provider, TestResult } from "../types";
 
 function StatusDot({ t }: { t: TestState | null }) {
@@ -153,6 +153,16 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
     const next = { ...parseExtra(p) };
     if (temp.trim() === "" || isNaN(v)) { delete next.temperature; setTemp(""); }
     else next.temperature = Math.min(2, Math.max(0, v));
+    try {
+      await api.providerSave({ id: p.id, name: p.name, kind: p.kind, base_url: p.base_url, model: p.model, extra: JSON.stringify(next) });
+      await refreshProviders();
+    } catch (e) { say(String(e)); }
+  };
+  const [hedge, setHedge] = useState(extra.hedge !== false);
+  const saveHedge = async (on: boolean) => {
+    setHedge(on);
+    const next = { ...parseExtra(p) };
+    if (on) delete next.hedge; else next.hedge = false;
     try {
       await api.providerSave({ id: p.id, name: p.name, kind: p.kind, base_url: p.base_url, model: p.model, extra: JSON.stringify(next) });
       await refreshProviders();
@@ -348,6 +358,13 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
           <input className="field w-[72px] text-right tabular-nums" inputMode="decimal" placeholder="0.3" value={temp} onChange={(e) => setTemp(e.target.value)} onBlur={saveTemp} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
           <span className="text-[11px] text-t3">留空 = 0.3(翻译求稳);0–2</span>
         </div>
+        {p.kind !== "ollama" && (
+          <div className="gr">
+            <span className="w-[64px] flex-none">超时重发</span>
+            <span className="flex-1 min-w-0 text-[11px] text-t3">4 秒仍无输出就并发重发一次,谁先出字用谁;被中止的请求可能仍按输入计费</span>
+            <Toggle on={hedge} onClick={() => saveHedge(!hedge)} />
+          </div>
+        )}
         {tmode !== "default" && tformat === "custom" && (
           <div className="gr">
             <span className="w-[64px] flex-none text-t3">字段</span>

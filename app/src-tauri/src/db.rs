@@ -172,6 +172,11 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         conn.execute_batch("ALTER TABLE usage_log ADD COLUMN usage_estimated INTEGER NOT NULL DEFAULT 0;")?;
         conn.pragma_update(None, "user_version", 8)?;
     }
+    if version < 9 {
+        // v9:首字超时并发重发、且由重发请求胜出的行(验收 F11)
+        conn.execute_batch("ALTER TABLE usage_log ADD COLUMN hedged INTEGER NOT NULL DEFAULT 0;")?;
+        conn.pragma_update(None, "user_version", 9)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -261,6 +266,8 @@ pub struct UsageRecord {
     pub sig_retry: i64,
     /// token 数是按字数估算的(服务商没报 usage)
     pub estimated: bool,
+    /// 首字超时并发重发,且重发请求胜出
+    pub hedged: bool,
 }
 
 /// 用量页一行(最近请求)
@@ -721,8 +728,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO usage_log(provider_id, article_id, kind, prompt_tokens, completion_tokens, latency_ms,
-                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model, cached_tokens, sig_retry, usage_estimated)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                                   ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars, created_at, model, cached_tokens, sig_retry, usage_estimated, hedged)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 u.provider_id,
                 u.article_id,
@@ -740,7 +747,8 @@ impl Db {
                 u.model,
                 u.cached_tokens,
                 u.sig_retry,
-                u.estimated
+                u.estimated,
+                u.hedged
             ],
         )?;
         Ok(())
@@ -871,12 +879,13 @@ mod tests {
             cached_tokens: 0,
             sig_retry: 0,
             estimated: false,
+            hedged: false,
         })
         .unwrap();
         {
             let conn = db.conn.lock().unwrap();
             let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 8);
+            assert_eq!(v, 9);
             let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
                 .query_row(
                     "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",
