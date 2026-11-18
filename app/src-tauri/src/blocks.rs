@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 
 /// 列表超过这么多字符才按顶层项拆(约 1200 字,spec §2.2.1)
 pub const LIST_SPLIT_CHARS: usize = 1200;
+/// 段落超过这么多字符(多为无空行的大段粘贴、日志)按行切成约 LIST_SPLIT_CHARS 的块,带 group 渲染时合回(验收 F9)
+pub const PARA_SPLIT_CHARS: usize = 2400;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockKind {
@@ -191,6 +193,12 @@ pub fn split_blocks(md: &str) -> Vec<Block> {
             for (s, e) in n.items {
                 push(&mut blocks, &mut cursor, BlockKind::List, s, e, Some(i as i64));
             }
+        } else if n.kind == BlockKind::Paragraph && n.end - n.start > PARA_SPLIT_CHARS {
+            let chunks = line_chunks(md, n.start, n.end, LIST_SPLIT_CHARS);
+            let group = if chunks.len() > 1 { Some(i as i64) } else { None };
+            for (s, e) in chunks {
+                push(&mut blocks, &mut cursor, BlockKind::Paragraph, s, e, group);
+            }
         } else {
             push(&mut blocks, &mut cursor, n.kind, n.start, n.end, None);
         }
@@ -204,6 +212,39 @@ pub fn split_blocks(md: &str) -> Vec<Block> {
         blocks.push(Block { kind: BlockKind::Raw, src: md[s..e].to_string(), hash: normalized_hash(&md[s..e]), sep: md[cursor..s].to_string(), group: None });
     }
     blocks
+}
+
+/// 把 [s, e) 按换行切成不超过 max 字节的片段(单行超长则整行成一片);片段之间只隔 "\n"
+fn line_chunks(md: &str, s: usize, e: usize, max: usize) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let (mut start, mut last_nl) = (s, None::<usize>);
+    for (off, c) in md[s..e].char_indices() {
+        if c != '\n' {
+            continue;
+        }
+        let nl = s + off;
+        if nl - start > max {
+            if let Some(cut) = last_nl.filter(|&c| c > start) {
+                out.push((start, cut));
+                start = cut + 1;
+            }
+        }
+        last_nl = Some(nl);
+    }
+    if e - start > max {
+        if let Some(cut) = last_nl.filter(|&c| c > start) {
+            out.push((start, cut));
+            start = cut + 1;
+        }
+    }
+    out.push((start, e));
+    out
+}
+
+/// 无围栏的整段 JSON(以 { / [ 开头且能解析):按代码直通,不送模型(验收 F9)
+pub fn looks_like_json(text: &str) -> bool {
+    let t = text.trim();
+    (t.starts_with('{') || t.starts_with('[')) && t.len() > 2 && serde_json::from_str::<serde_json::Value>(t).is_ok()
 }
 
 /// 按序拼回:`sep + text`
@@ -289,6 +330,28 @@ pub fn plain_to_markdown(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_paragraph_splits_by_line_and_reassembles() {
+        let line = "word ".repeat(40); // 200 字节
+        let para: String = (0..30).map(|_| line.trim_end().to_string()).collect::<Vec<_>>().join("\n");
+        let md = format!("# T\n\n{para}\n\nend");
+        let bs = split_blocks(&md);
+        let paras: Vec<_> = bs.iter().filter(|b| b.group.is_some()).collect();
+        assert!(paras.len() >= 5, "split into {}", paras.len());
+        assert!(paras.iter().all(|b| b.src.len() <= LIST_SPLIT_CHARS + 200));
+        assert!(paras.iter().skip(1).all(|b| b.sep == "\n"));
+        let back: String = bs.iter().map(|b| format!("{}{}", b.sep, b.src)).collect();
+        assert_eq!(back, md);
+    }
+
+    #[test]
+    fn json_detection() {
+        assert!(looks_like_json("  {\"a\": [1, 2], \"b\": \"x\"}\n"));
+        assert!(looks_like_json("[1,2,3]"));
+        assert!(!looks_like_json("{not json}"));
+        assert!(!looks_like_json("Hello {world}"));
+    }
     use crate::validate::signature;
 
     fn kinds(md: &str) -> Vec<&'static str> {

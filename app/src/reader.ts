@@ -14,6 +14,7 @@ const DENSITY: Record<Density, { line: number; enLine: number; gap: number }> = 
 };
 
 export const SCALE_MIN = 0.8;
+const MIN_PX = 11;
 export const SCALE_MAX = 1.5;
 
 export function stepScale(cur: number, dir: "zoom-in" | "zoom-out" | "zoom-reset"): number {
@@ -27,8 +28,9 @@ export function applyReading(kind: ScaleKind, scale: number, density: Density) {
   const r = document.documentElement.style;
   const d = DENSITY[density] ?? DENSITY.standard;
   const b = BASE[kind];
-  r.setProperty("--zh-size", `${(b.zh * scale).toFixed(1)}px`);
-  r.setProperty("--en-size", `${(b.en * scale).toFixed(1)}px`);
+  // 验收 F3:缩到最小也不低于 11px(md 内行内码 / 表格另用 max(11px, …em) 兜底)
+  r.setProperty("--zh-size", `${Math.max(MIN_PX, b.zh * scale).toFixed(1)}px`);
+  r.setProperty("--en-size", `${Math.max(MIN_PX, b.en * scale).toFixed(1)}px`);
   r.setProperty("--zh-line", String(d.line));
   r.setProperty("--en-line", String(d.enLine));
   r.setProperty("--pair-gap", `${Math.round((kind === "main" ? 24 : 12) * d.gap * Math.max(1, scale))}px`);

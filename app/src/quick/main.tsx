@@ -453,7 +453,7 @@ function QuickApp() {
                   <div key={p.id}>
                     <div className="flex items-center">
                       <button className="flex-1 min-w-0 !h-auto !py-1" title={p.base_url} onClick={() => switchProvider(p.id)}>
-                        <span className="w-3 flex-none text-accent">{p.is_active ? "✓" : ""}</span>
+                        <span className="w-3 flex-none text-accenttx">{p.is_active ? "✓" : ""}</span>
                         <span className="min-w-0 flex flex-col leading-tight py-0.5">
                           <span className="truncate">{p.name}</span>
                           <span className="font-code text-[11px] text-t3 truncate">{p.model}</span>
@@ -516,12 +516,24 @@ function QuickApp() {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); fire(); }
           }}
         />
-        <div className="flex items-center justify-end -mt-1">
+        <div className="flex items-center justify-end gap-1 -mt-1">
+          {input && !streaming && (
+            <button className="border-none bg-transparent text-[11px] text-t3 hover:text-t1 px-1 mr-auto" title="清空原文与译文" onClick={clear}>清空</button>
+          )}
           <button
             className="border-none bg-transparent text-[11px] text-t3 hover:text-t1 px-1"
             title="原文格式:自动按 Markdown 语法密度判定;纯文本 = 保留单换行、行首 # > 1. 不当作 Markdown"
             onClick={() => setFmt(fmt === "auto" ? "md" : fmt === "md" ? "plain" : "auto")}
           >{fmt === "auto" ? "格式:自动" : fmt === "md" ? "格式:Markdown" : "格式:纯文本"}</button>
+          {/* 主操作收进源文框(§2.7.4:状态栏只留指标 + 复制 + 存入) */}
+          {!streaming && (
+            <button
+              className="border-none bg-transparent text-[12px] font-medium text-accenttx px-1 disabled:text-t3 whitespace-nowrap"
+              disabled={!input.trim() || !active}
+              title="⌘↩"
+              onClick={() => fire()}
+            >{blocks.length && input.trim() === lastSrc.trim() ? "重新翻译" : "翻译"} <span className="font-normal text-t3">⌘↩</span></button>
+          )}
         </div>
       </div>
       )}
@@ -569,12 +581,9 @@ function QuickApp() {
           ) : usage.requests ? `输入 ${usage.prompt_tokens} · 输出 ${usage.completion_tokens} tok` : ""}
         </span>
         <span className="flex-1" />
-        {input && !streaming && !blocks.length && <button className="btn" onClick={clear}>清空</button>}
         <TbButton icon="copy" title="复制译文" disabled={!outText} onClick={() => { navigator.clipboard?.writeText(outText).then(() => say("已复制")); }} size={14} />
         <TbButton icon="library" title="在主窗打开(已自动存入文章库)" disabled={!articleId || streaming} onClick={openInMain} size={14} />
-        {streaming
-          ? <button className="btn" onClick={cancel}>取消</button>
-          : <button className={"btn " + (input.trim() !== lastSrc.trim() || !blocks.length ? "primary" : "")} disabled={!input.trim() || !active} onClick={() => fire()} title="⌘↩">{blocks.length && input.trim() === lastSrc.trim() ? "重新翻译" : "翻译"}</button>}
+        {streaming && <button className="btn" title="Esc" onClick={cancel}>取消</button>}
         {infoOpen && live.metrics && (
           <div className="menu absolute z-40 bottom-full mb-1 left-2 w-[280px] !p-3" onClick={(e) => e.stopPropagation()}>
             <MetricsDetail m={live.metrics} price={prefs?.price_per_mtok} cachedPrice={prefs?.cached_price_per_mtok} thinkTail={live.thinkTail} />

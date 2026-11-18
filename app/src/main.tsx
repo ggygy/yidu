@@ -202,7 +202,7 @@ function GlossaryPanel({ onClose, say, onChanged }: { onClose: () => void; say: 
           <div key={g.id} className="group py-1.5 px-2 rounded-md flex items-center gap-2 text-[13px] hover:bg-surface2">
             <span className={g.enabled ? "text-t1" : "text-t3 line-through"}>{g.term}</span>
             <span className="text-t3">→</span>
-            <span className={g.enabled ? "text-accent" : "text-t3"}>{g.translation}</span>
+            <span className={g.enabled ? "text-accenttx" : "text-t3"}>{g.translation}</span>
             <span className="flex-1" />
             <button className="btn !h-5 !px-2 !text-[11px] opacity-0 group-hover:opacity-100" onClick={() => api.glossarySetEnabled(g.id, !g.enabled).then(refresh)}>{g.enabled ? "停用" : "启用"}</button>
             <button className="tbtn !w-5 !h-5 opacity-0 group-hover:opacity-100" title="删除" onClick={() => { api.glossaryDelete(g.id).then(refresh); say("已删除"); }}><Icon n="x" size={11} /></button>
@@ -498,7 +498,7 @@ function App() {
         <p className="zh m-0 text-t3 !text-[13px]">{u.streaming ? <span className="caret" /> : "待译"}</p>
       )}
       {u.warn && !busy && (
-        <button className="self-start inline-flex items-center gap-1.5 h-[22px] px-2 rounded-md border-none bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] text-danger text-[11px]" title={`${u.warn}(已自动重译一次)`} onClick={() => retryUnit(u)}>
+        <button className="self-start inline-flex items-center gap-1.5 h-[22px] px-2 rounded-md border-none bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] text-danger text-[11px]" title={`${u.warn}(已自动重译一次)`} onClick={() => retryUnit(u)}>
           格式可能有误 · 重译
         </button>
       )}
@@ -511,7 +511,8 @@ function App() {
     <div className="h-screen flex flex-col overflow-hidden mat" onClick={() => { setVocab(null); setTermPop(null); }}>
       {/* 统一工具栏(52pt,红绿灯 {20,28} 中线对齐) */}
       <header className="tb" data-tauri-drag-region>
-        <Segmented value={view} options={VIEWS} onChange={setView} />
+        {/* 空态 / 新建页没有可切换的视图(验收 F8) */}
+        {doc && !composing ? <Segmented value={view} options={VIEWS} onChange={setView} /> : <span className="w-[1px]" />}
         <span className="flex-1 min-w-[12px] self-stretch" data-tauri-drag-region />
         <span className="text-[13px] font-semibold truncate max-w-[40%]" data-tauri-drag-region>{composing ? "新建翻译" : doc ? doc.article.title : "译读"}</span>
         <span className="flex-1 min-w-[12px] self-stretch" data-tauri-drag-region />
@@ -520,6 +521,7 @@ function App() {
             {busy && live.running && <LiveStatus live={live} />}
             <span className="w-[64px] h-[5px] rounded-full bg-fill2 overflow-hidden"><i className="block h-full bg-accent transition-[width] duration-500" style={{ width: `${progress}%` }} /></span>
             {doneCount}/{blocks.length}
+            {busy && <button className="border-none bg-transparent text-[11px] text-accenttx px-0.5" title="取消翻译(Esc)" onClick={(e) => { e.stopPropagation(); cancelCurrent(); }}>取消</button>}
             {!busy && live.metrics ? ` · 首字 ${sec(live.metrics.ttft_ms)} · 总 ${sec(live.metrics.total_ms)}` : sessUsage.requests ? ` · ${fmtTokens(sessUsage.completion_tokens)} tok` : ""}
           </span>
         )}
@@ -593,10 +595,10 @@ function App() {
                     <button className="btn primary" title="⌘N" onClick={() => setComposing(true)}>新建翻译</button>
                   </div>
                   {providers.length > 0 && !activeProvider && (
-                    <button className="border-none bg-transparent text-accent text-[12px] mt-2" onClick={() => openSettings("models")}>尚未选择使用中的模型 · 打开设置</button>
+                    <button className="border-none bg-transparent text-accenttx text-[12px] mt-2" onClick={() => openSettings("models")}>尚未选择使用中的模型 · 打开设置</button>
                   )}
                   {providers.length === 0 && (
-                    <button className="border-none bg-transparent text-accent text-[12px] mt-2" onClick={() => openSettings("models")}>尚未配置翻译模型 · 打开设置,粘贴 API 密钥即可开始</button>
+                    <button className="border-none bg-transparent text-accenttx text-[12px] mt-2" onClick={() => openSettings("models")}>尚未配置翻译模型 · 打开设置,粘贴 API 密钥即可开始</button>
                   )}
                   <p className="text-t3 text-[12px] mt-5 mb-0">阅读时点任意英文单词即可查词收藏</p>
                 </div>
@@ -767,7 +769,7 @@ function App() {
       {termPop && (
         <div className="fixed z-[70] bg-surface rounded-lg shadow-[var(--shadow-card)] px-3 py-2.5 min-w-[200px]" style={{ left: Math.min(termPop.x, window.innerWidth - 240), top: Math.min(termPop.y, window.innerHeight - 130) }} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-2 text-[13px]">
-            <span className="font-code text-[12px] text-t2">{termPop.hit.from}</span><span className="text-t3">→</span><span className="text-accent font-semibold">{termPop.hit.to}</span>
+            <span className="font-code text-[12px] text-t2">{termPop.hit.from}</span><span className="text-t3">→</span><span className="text-accenttx font-semibold">{termPop.hit.to}</span>
           </div>
           <div className="flex gap-2 mt-2 justify-end">
             <button className="btn" onClick={() => setTermPop(null)}>关闭</button>

@@ -91,7 +91,7 @@ function SettingsApp() {
           {SECTIONS.map((s) => (
             <button
               key={s.id}
-              className={"flex items-center gap-2 h-[28px] px-2 rounded-md border-none text-[13px] text-left " + (section === s.id ? "bg-accent text-onaccent" : "bg-transparent text-t1 hover:bg-surface2")}
+              className={"flex items-center gap-2 h-[28px] px-2 rounded-md border-none text-[13px] text-left " + (section === s.id ? "bg-accentfill text-onaccent" : "bg-transparent text-t1 hover:bg-surface2")}
               onClick={() => setSection(s.id)}
             >
               <span className="w-5 h-5 rounded-[5px] grid place-items-center text-white text-[11px] font-semibold flex-none" style={{ background: s.color }}>{s.icon}</span>
@@ -172,7 +172,7 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
       </p>
       <Group
         title="翻译提示词"
-        foot={<>留空 = 内置默认(英文)。支持 {"{from}"} / {"{to}"} 占位;标签协议与方向指令由应用自动附加。<button className="ml-2 border-none bg-transparent text-accent text-[11px] p-0" onClick={() => { setPromptDraft(""); applyPrefs({ custom_prompt: "" }); say("已恢复默认提示词"); }}>恢复默认</button></>}
+        foot={<>留空 = 内置默认(英文)。支持 {"{from}"} / {"{to}"} 占位;标签协议与方向指令由应用自动附加。<button className="ml-2 border-none bg-transparent text-accenttx text-[11px] p-0" onClick={() => { setPromptDraft(""); applyPrefs({ custom_prompt: "" }); say("已恢复默认提示词"); }}>恢复默认</button></>}
       >
         <div className="p-2">
           <textarea
@@ -261,7 +261,7 @@ function QuickSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
 
 function ttftCls(ms: number | null) {
   if (ms == null) return "text-t3";
-  return ms < 1000 ? "text-ok" : ms <= 3000 ? "text-[#c88a00] dark:text-[#ffd60a]" : "text-danger";
+  return ms < 1000 ? "text-ok" : ms <= 3000 ? "text-warn" : "text-danger";
 }
 const s1 = (ms: number | null) => (ms == null ? "—" : `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)}s`);
 

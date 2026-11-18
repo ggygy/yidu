@@ -56,12 +56,12 @@ export function DirPicker({ value, onChange }: { value: string; onChange: (d: st
   if (value === "auto") {
     return (
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md bg-accentsoft text-accent text-[12px] font-medium whitespace-nowrap">
+        <span className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md bg-accentsoft text-accenttx text-[12px] font-medium whitespace-nowrap">
           <Icon n="zap" size={12} /> 自动识别
         </span>
         <button
           title="放弃自动,手动指定方向"
-          className="border-none bg-transparent text-[12px] text-accent px-0.5 whitespace-nowrap"
+          className="border-none bg-transparent text-[12px] text-accenttx px-0.5 whitespace-nowrap"
           onClick={() => onChange("en2zh")}
         >
           改手动
