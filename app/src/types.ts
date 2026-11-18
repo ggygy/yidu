@@ -43,6 +43,7 @@ export type StreamEvent =
   | { type: "partial"; idx: number; text: string }
   | { type: "usage"; prompt_tokens: number; completion_tokens: number; reasoning_tokens: number; cached_tokens: number; estimated?: boolean }
   | { type: "phase"; phase: Phase }
+  | { type: "hedge" }
   | { type: "thinking"; chars: number; tail: string }
   | ({ type: "metrics" } & SessionMetrics)
   | { type: "done"; article_id: number }

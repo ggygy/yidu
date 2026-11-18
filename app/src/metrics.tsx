@@ -9,9 +9,11 @@ export type Live = {
   thinkChars: number;
   thinkTail: string;
   metrics: SessionMetrics | null;
+  /** 首字超时,已并发重发(F11) */
+  hedged: boolean;
 };
 
-export const IDLE: Live = { running: false, phase: "conn", startedAt: 0, thinkChars: 0, thinkTail: "", metrics: null };
+export const IDLE: Live = { running: false, phase: "conn", startedAt: 0, thinkChars: 0, thinkTail: "", metrics: null, hedged: false };
 
 export const startLive = (): Live => ({ ...IDLE, running: true, startedAt: Date.now() });
 
@@ -19,6 +21,7 @@ export const startLive = (): Live => ({ ...IDLE, running: true, startedAt: Date.
 export function reduceLive(l: Live, e: StreamEvent): Live {
   switch (e.type) {
     case "phase": return { ...l, phase: e.phase };
+    case "hedge": return { ...l, hedged: true };
     case "thinking": return { ...l, thinkChars: e.chars, thinkTail: e.tail };
     case "metrics": { const { type: _t, ...m } = e; return { ...l, metrics: m, running: false }; }
     case "done":
@@ -39,6 +42,9 @@ export function speed(m: SessionMetrics): number | null {
 
 const PHASE_ZH: Record<Phase, string> = { conn: "连接", think: "思考", gen: "生成" };
 
+/** 连接阶段超过这么久仍无输出 → 提示「服务商排队中」(F11;时间几乎都耗在服务商首字节) */
+const QUEUE_HINT_MS = 2000;
+
 function useTicker(on: boolean) {
   const [, set] = useState(0);
   useEffect(() => {
@@ -52,12 +58,16 @@ function useTicker(on: boolean) {
 export function LiveStatus({ live }: { live: Live }) {
   useTicker(live.running);
   const color = live.phase === "gen" ? "var(--ok)" : live.phase === "think" ? "#bf5af2" : "var(--accent)";
+  const elapsed = Date.now() - live.startedAt;
+  const queued = live.running && live.phase === "conn" && elapsed > QUEUE_HINT_MS;
+  const label = queued ? "服务商排队中" : PHASE_ZH[live.phase];
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap tabular-nums" title={live.thinkTail ? `思考末尾:${live.thinkTail}` : undefined}>
       <i className="w-1.5 h-1.5 rounded-full [animation:breathe_1.2s_infinite]" style={{ background: color }} />
-      {PHASE_ZH[live.phase]}
+      {label}
       {live.phase === "think" && live.thinkChars > 0 ? ` ${live.thinkChars} 字` : ""}
-      {" · "}{((Date.now() - live.startedAt) / 1000).toFixed(1)}s
+      {" · "}{(elapsed / 1000).toFixed(1)}s
+      {live.hedged && live.phase === "conn" ? " · 已重发" : ""}
     </span>
   );
 }

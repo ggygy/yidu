@@ -29,6 +29,8 @@ pub enum StreamEvent {
     Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64, estimated: bool },
     /// 阶段(§2.6.5):conn 连接 / think 思考 / gen 生成
     Phase { phase: String },
+    /// 首字超时,已并发重发同一请求(F11;前端在「服务商排队中」后标「已重发」)
+    Hedge,
     /// 思考进度(思考关不掉时;≥100ms 节流):累计字数 + 末尾约 200 字。思考文本绝不进译文
     Thinking { chars: usize, tail: String },
     /// 会话结束明细(§2.6.6;口径见 §2.6.8,均相对会话开始)
@@ -408,7 +410,7 @@ impl BatchCtx<'_> {
     /// 一次 HTTP 请求结束:写 usage_log(含计时埋点)并推 usage 事件
     /// prompt_est:本请求输入(system + 历史 + user)的估算 token;raw:已收到的正文。服务商没报 usage 时据此估算(F10)
     #[allow(clippy::too_many_arguments)]
-    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>, sig_retry: bool, prompt_est: i64, raw: &str) {
+    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>, sig_retry: bool, prompt_est: i64, raw: &str, hedged: bool) {
         if stats.thinking_unsupported {
             let _ = self.db.mark_provider_thinking_unsupported(self.provider_row.id);
         }
@@ -434,6 +436,7 @@ impl BatchCtx<'_> {
             model: self.provider_row.model.clone(),
             sig_retry: if sig_retry { items.len() as i64 } else { 0 },
             estimated: u.estimated,
+            hedged,
         });
         {
             let mut g = self.meter.lock().unwrap();
@@ -516,16 +519,40 @@ impl BatchCtx<'_> {
             + history.iter().map(|(u, a)| providers::estimate_tokens(u) + providers::estimate_tokens(a)).sum::<i64>()
             + providers::estimate_tokens(&user);
         let cancel = self.cancel.clone();
-        let (tx, mut rx) = mpsc::unbounded_channel();
         let t0 = Instant::now();
-        let mut handle = tauri::async_runtime::spawn(async move {
-            provider.stream_chat(&system, &history, &user, tx, cancel).await
-        });
+        let hedge = providers::hedge_enabled(&self.provider_row.kind, &self.provider_row.extra);
+        let spawn_req = {
+            let (system, history, user) = (system.clone(), history.clone(), user.clone());
+            move |provider: Box<dyn providers::Provider>, cancel: CancelCheck| {
+                let (tx, rx) = mpsc::unbounded_channel();
+                let (system, history, user) = (system.clone(), history.clone(), user.clone());
+                let handle = tauri::async_runtime::spawn(async move { provider.stream_chat(&system, &history, &user, tx, cancel).await });
+                (rx, handle)
+            }
+        };
+        let (rx_a, handle_a) = spawn_req(provider, cancel.clone());
+        // 首字超时并发重发(F11):A 在 HEDGE_AFTER_MS 内没有任何输出 → 再发 B,谁先出字用谁,另一个中止
+        let race = race_first_payload(rx_a, handle_a, hedge, providers::HEDGE_AFTER_MS, || {
+            if (self.cancel)() {
+                return None;
+            }
+            let _ = self.channel.send(StreamEvent::Hedge);
+            let b = providers::build(&self.provider_row).ok()?;
+            Some(spawn_req(b, cancel.clone()))
+        })
+        .await;
+        let (mut rx, mut handle, first, hedged) = race;
+        // 胜者若是 B,它的计时以 B 发出为起点 → 入库前平移回本次请求起点
+        let offset_ms = if hedged { providers::HEDGE_AFTER_MS as i64 } else { 0 };
+        let shift = |s: StreamStats| shift_stats(s, offset_ms);
 
         let mut machine = TagStateMachine::new();
         let mut raw = String::new();
         let mut out: Vec<Tagged> = Vec::new();
         let mut first_block_ms: Option<i64> = None;
+        if let Some(p) = first {
+            process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
+        }
         loop {
             let step = tokio::select! {
                 m = rx.recv() => match m {
@@ -543,24 +570,25 @@ impl BatchCtx<'_> {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
                     let stats = match res {
-                        Ok(s) => s,
+                        Ok(s) => shift(s),
                         Err(e) => {
                             // 流中途出错:已产出的部分照样计费 → 按字数估算入库(F10)
-                            self.record_usage(&StreamStats::default(), t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
+                            self.record_usage(&StreamStats::default(), t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw, hedged);
                             return Err(e);
                         }
                     };
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw, hedged);
                     self.log_unparsed(&out, &raw, items.len());
                     let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
                 }
                 Step::ProviderDone(Ok(stats)) => {
+                    let stats = shift(stats);
                     // provider 已结束:收干通道内残留载荷再返回
                     while let Ok(p) = rx.try_recv() {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw, hedged);
                     self.log_unparsed(&out, &raw, items.len());
                     let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
@@ -569,7 +597,7 @@ impl BatchCtx<'_> {
                     while let Ok(p) = rx.try_recv() {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&StreamStats::default(), t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
+                    self.record_usage(&StreamStats::default(), t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw, hedged);
                     return Err(e);
                 }
             }
@@ -868,6 +896,60 @@ fn process_payload(
 }
 
 
+
+type ReqHandle = tauri::async_runtime::JoinHandle<Result<StreamStats>>;
+type ReqRx = mpsc::UnboundedReceiver<SsePayload>;
+
+/// 首字超时并发重发(F11)。返回 (胜者通道, 胜者任务, 胜者首个载荷, 胜者是否为重发)。
+/// - 不启用或 A 在 HEDGE_AFTER_MS 内有输出 / 结束:直接用 A;
+/// - 超时则调 spawn_b 再发一个,谁先出载荷用谁并中止另一个;一方无输出就结束(出错)时继续等另一方,
+///   都结束则返回 A(其错误由调用方照常处理)。
+async fn race_first_payload<F>(mut rx_a: ReqRx, handle_a: ReqHandle, enabled: bool, after_ms: u64, spawn_b: F) -> (ReqRx, ReqHandle, Option<SsePayload>, bool)
+where
+    F: FnOnce() -> Option<(ReqRx, ReqHandle)>,
+{
+    if !enabled {
+        return (rx_a, handle_a, None, false);
+    }
+    let timeout = tokio::time::sleep(std::time::Duration::from_millis(after_ms));
+    tokio::select! {
+        m = rx_a.recv() => return (rx_a, handle_a, m, false),
+        _ = timeout => {}
+    }
+    let Some((mut rx_b, handle_b)) = spawn_b() else {
+        return (rx_a, handle_a, None, false);
+    };
+    let (mut a_open, mut b_open) = (true, true);
+    loop {
+        tokio::select! {
+            m = rx_a.recv(), if a_open => match m {
+                Some(p) => { handle_b.abort(); return (rx_a, handle_a, Some(p), false); }
+                None => a_open = false,
+            },
+            m = rx_b.recv(), if b_open => match m {
+                Some(p) => { handle_a.abort(); return (rx_b, handle_b, Some(p), true); }
+                None => b_open = false,
+            },
+        }
+        if !a_open && !b_open {
+            handle_b.abort();
+            return (rx_a, handle_a, None, false);
+        }
+    }
+}
+
+/// 把 provider 内以其自身发出时刻为零点的计时平移 offset_ms(重发胜出时对齐到本次请求起点)
+fn shift_stats(mut s: StreamStats, offset_ms: i64) -> StreamStats {
+    if offset_ms != 0 {
+        for f in [&mut s.headers_ms, &mut s.first_byte_ms, &mut s.first_reasoning_ms, &mut s.first_content_ms] {
+            if let Some(v) = f.as_mut() {
+                *v += offset_ms;
+            }
+        }
+    }
+    s
+}
+
 /// 一次请求最终入库的 token 数
 #[derive(Debug, PartialEq)]
 struct ResolvedUsage {
@@ -992,6 +1074,92 @@ mod tests {
         // 连接即失败 / 尚未产出就被顶替:不估算,record_usage 会跳过入库
         let u = resolve_usage(&StreamStats::default(), 300, "");
         assert_eq!(u, ResolvedUsage { prompt: 0, completion: 0, reasoning: 0, estimated: false });
+    }
+
+
+    // ---------- F11:首字超时并发重发 ----------
+
+    /// 模拟一个请求:等 delay_ms 后发出一个载荷(None = 不发,直接以 ok 结束;Some(None) 永不输出)
+    fn fake_req(delay_ms: u64, payload: Option<&str>, ok: bool) -> (ReqRx, ReqHandle) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let payload = payload.map(|s| s.to_string());
+        let handle = tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            if let Some(p) = payload {
+                let _ = tx.send(SsePayload::Delta(p));
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            if ok { Ok(StreamStats::default()) } else { Err(anyhow!("upstream 500")) }
+        });
+        (rx, handle)
+    }
+
+    fn first_text(p: &Option<SsePayload>) -> Option<String> {
+        match p {
+            Some(SsePayload::Delta(d)) => Some(d.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn hedge_disabled_keeps_first_request() {
+        tauri::async_runtime::block_on(async {
+            let (rx, h) = fake_req(10, Some("a"), true);
+            let (_rx, _h, first, hedged) = race_first_payload(rx, h, false, 20, || panic!("不应重发")).await;
+            assert_eq!((first, hedged), (None, false)); // 未启用:不预读载荷,原样交回
+        });
+    }
+
+    #[test]
+    fn fast_first_request_never_hedges() {
+        tauri::async_runtime::block_on(async {
+            let (rx, h) = fake_req(5, Some("a"), true);
+            let (_rx, _h, first, hedged) = race_first_payload(rx, h, true, 200, || panic!("不应重发")).await;
+            assert_eq!((first_text(&first), hedged), (Some("a".into()), false));
+        });
+    }
+
+    #[test]
+    fn slow_first_request_is_beaten_by_hedge() {
+        tauri::async_runtime::block_on(async {
+            let (rx, h) = fake_req(2_000, Some("a"), true);
+            let (_rx, _h, first, hedged) = race_first_payload(rx, h, true, 30, || Some(fake_req(10, Some("b"), true))).await;
+            assert_eq!((first_text(&first), hedged), (Some("b".into()), true));
+        });
+    }
+
+    #[test]
+    fn failed_first_request_falls_through_to_hedge() {
+        tauri::async_runtime::block_on(async {
+            // A 超时后才出错结束(无输出),B 稍后出字 → 用 B
+            let (rx, h) = fake_req(50, None, false);
+            let (_rx, _h, first, hedged) = race_first_payload(rx, h, true, 20, || Some(fake_req(80, Some("b"), true))).await;
+            assert_eq!((first_text(&first), hedged), (Some("b".into()), true));
+        });
+    }
+
+    #[test]
+    fn error_before_timeout_is_returned_without_hedge() {
+        tauri::async_runtime::block_on(async {
+            let (rx, h) = fake_req(5, None, false);
+            let (_rx, h, first, hedged) = race_first_payload(rx, h, true, 200, || panic!("不应重发")).await;
+            assert_eq!((first_text(&first), hedged), (None, false));
+            assert!(h.await.unwrap().is_err()); // 错误照常交给调用方
+        });
+    }
+
+    #[test]
+    fn shift_stats_moves_timings_only() {
+        let s = StreamStats { first_content_ms: Some(300), first_byte_ms: Some(250), prompt_tokens: 9, ..Default::default() };
+        let t = shift_stats(s, 4000);
+        assert_eq!((t.first_content_ms, t.first_byte_ms, t.first_reasoning_ms, t.prompt_tokens), (Some(4300), Some(4250), None, 9));
+    }
+
+    #[test]
+    fn hedge_off_for_ollama_and_opt_out() {
+        assert!(providers::hedge_enabled("openai_compatible", "{}"));
+        assert!(!providers::hedge_enabled("openai_compatible", r#"{"hedge":false}"#));
+        assert!(!providers::hedge_enabled("ollama", "{}"));
     }
 
 }
