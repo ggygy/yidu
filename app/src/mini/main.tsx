@@ -53,8 +53,12 @@ function Mini() {
       tabIndex={0}
       aria-label="展开快捷翻译"
     >
-      <span className="mini-glyph">译</span>
-      {st.busy && <span className="mini-ring" />}
+      {/* 与应用图标同款:深色底 + 三道横线,中间一道是强调色;翻译中中线来回流动 */}
+      <span className="mini-bars" aria-hidden>
+        <i />
+        <i className="mini-bar-accent" />
+        <i />
+      </span>
       {st.done && !st.busy && <span className="mini-dot" />}
     </div>
   );
