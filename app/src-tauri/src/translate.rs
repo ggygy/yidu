@@ -25,7 +25,8 @@ pub enum StreamEvent {
     /// format_warn:结构签名不一致(自动重译一次后仍不一致)时的说明,空 = 正常
     Block { idx: usize, text: String, terms: String, format_warn: String },
     Partial { idx: usize, text: String },
-    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64 },
+    /// estimated:服务商没报 usage,按字数估算(验收 F10)
+    Usage { prompt_tokens: i64, completion_tokens: i64, reasoning_tokens: i64, cached_tokens: i64, estimated: bool },
     /// 阶段(§2.6.5):conn 连接 / think 思考 / gen 生成
     Phase { phase: String },
     /// 思考进度(思考关不掉时;≥100ms 节流):累计字数 + 末尾约 200 字。思考文本绝不进译文
@@ -405,45 +406,50 @@ impl BatchCtx<'_> {
     }
 
     /// 一次 HTTP 请求结束:写 usage_log(含计时埋点)并推 usage 事件
-    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>, sig_retry: bool) {
+    /// prompt_est:本请求输入(system + 历史 + user)的估算 token;raw:已收到的正文。服务商没报 usage 时据此估算(F10)
+    #[allow(clippy::too_many_arguments)]
+    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>, sig_retry: bool, prompt_est: i64, raw: &str) {
         if stats.thinking_unsupported {
             let _ = self.db.mark_provider_thinking_unsupported(self.provider_row.id);
         }
-        // 被取消 / 什么都没产出的请求(粘贴即译时新粘贴顶替旧会话)不入用量表,免得拉低请求数与首字中位数
-        if stats.prompt_tokens == 0 && stats.completion_tokens == 0 && stats.first_content_ms.is_none() {
+        let u = resolve_usage(stats, prompt_est, raw);
+        // 什么都没产出的请求(粘贴即译时新粘贴顶替旧会话、连接即失败)不入用量表,免得拉低请求数与首字中位数
+        if u.prompt == 0 && u.completion == 0 && stats.first_content_ms.is_none() {
             return;
         }
         let _ = self.db.insert_usage(&UsageRecord {
             provider_id: self.provider_row.id,
             article_id: Some(self.article_id),
             kind: "translate".into(),
-            prompt_tokens: stats.prompt_tokens,
-            completion_tokens: stats.completion_tokens,
+            prompt_tokens: u.prompt,
+            completion_tokens: u.completion,
             latency_ms: elapsed_ms,
             ttft_ms: stats.first_content_ms,
             first_block_ms,
             first_byte_ms: stats.first_byte_ms,
-            reasoning_tokens: stats.reasoning_tokens,
+            reasoning_tokens: u.reasoning,
             cached_tokens: stats.cached_tokens,
             batch_blocks: items.len() as i64,
             batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
             model: self.provider_row.model.clone(),
             sig_retry: if sig_retry { items.len() as i64 } else { 0 },
+            estimated: u.estimated,
         });
         {
             let mut g = self.meter.lock().unwrap();
-            g.m.prompt_tokens += stats.prompt_tokens;
-            g.m.completion_tokens += stats.completion_tokens;
-            g.m.reasoning_tokens += stats.reasoning_tokens;
+            g.m.prompt_tokens += u.prompt;
+            g.m.completion_tokens += u.completion;
+            g.m.reasoning_tokens += u.reasoning;
             g.m.cached_tokens += stats.cached_tokens;
             g.m.requests += 1;
         }
-        if stats.prompt_tokens > 0 || stats.completion_tokens > 0 {
+        if u.prompt > 0 || u.completion > 0 {
             let _ = self.channel.send(StreamEvent::Usage {
-                prompt_tokens: stats.prompt_tokens,
-                completion_tokens: stats.completion_tokens,
-                reasoning_tokens: stats.reasoning_tokens,
+                prompt_tokens: u.prompt,
+                completion_tokens: u.completion,
+                reasoning_tokens: u.reasoning,
                 cached_tokens: stats.cached_tokens,
+                estimated: u.estimated,
             });
         }
     }
@@ -506,6 +512,9 @@ impl BatchCtx<'_> {
         }
         let provider = providers::build(&self.provider_row)?;
         let system = self.system.clone();
+        let prompt_est = providers::estimate_tokens(&system)
+            + history.iter().map(|(u, a)| providers::estimate_tokens(u) + providers::estimate_tokens(a)).sum::<i64>()
+            + providers::estimate_tokens(&user);
         let cancel = self.cancel.clone();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let t0 = Instant::now();
@@ -529,13 +538,19 @@ impl BatchCtx<'_> {
                 Step::Payload(p) => process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms),
                 Step::Closed => {
                     // tx 断开 = provider 已结束,join 立即就绪
-                    let stats = handle
-                        .await
-                        .map_err(|e| anyhow!("provider 任务异常: {e}"))??;
+                    let res = handle.await.map_err(|e| anyhow!("provider 任务异常: {e}")).and_then(|r| r);
                     while let Ok(p) = rx.try_recv() {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some());
+                    let stats = match res {
+                        Ok(s) => s,
+                        Err(e) => {
+                            // 流中途出错:已产出的部分照样计费 → 按字数估算入库(F10)
+                            self.record_usage(&StreamStats::default(), t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
+                            return Err(e);
+                        }
+                    };
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
                     self.log_unparsed(&out, &raw, items.len());
                     let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
@@ -545,12 +560,18 @@ impl BatchCtx<'_> {
                     while let Ok(p) = rx.try_recv() {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some());
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
                     self.log_unparsed(&out, &raw, items.len());
                     let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
                 }
-                Step::ProviderDone(Err(e)) => return Err(e),
+                Step::ProviderDone(Err(e)) => {
+                    while let Ok(p) = rx.try_recv() {
+                        process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
+                    }
+                    self.record_usage(&StreamStats::default(), t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some(), prompt_est, &raw);
+                    return Err(e);
+                }
             }
         }
     }
@@ -846,6 +867,38 @@ fn process_payload(
     }
 }
 
+
+/// 一次请求最终入库的 token 数
+#[derive(Debug, PartialEq)]
+struct ResolvedUsage {
+    prompt: i64,
+    completion: i64,
+    reasoning: i64,
+    estimated: bool,
+}
+
+/// 服务商报了 usage 就用它;一个都没报但确有产出(正文或思考)时按字数估算(验收 F10:
+/// 流被取消、usage chunk 缺失、流中途出错时 usage_log 曾记成 0 token)。
+fn resolve_usage(stats: &StreamStats, prompt_est: i64, raw: &str) -> ResolvedUsage {
+    let produced = !raw.is_empty() || stats.reasoning_chars > 0;
+    if stats.prompt_tokens > 0 || stats.completion_tokens > 0 || !produced {
+        return ResolvedUsage {
+            prompt: stats.prompt_tokens,
+            completion: stats.completion_tokens,
+            reasoning: stats.reasoning_tokens,
+            estimated: false,
+        };
+    }
+    // 思考文本语种未知,按 0.5 token/字估
+    let reasoning = (stats.reasoning_chars + 1) / 2;
+    ResolvedUsage {
+        prompt: prompt_est,
+        completion: providers::estimate_tokens(raw) + reasoning,
+        reasoning,
+        estimated: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,4 +961,37 @@ mod tests {
         let (out, _) = apply_terms("未闭合 `rust 依然替换", &r);
         assert_eq!(out, "未闭合 `铁锈语言 依然替换");
     }
+
+    // ---------- F10:服务商没报 usage 时估算 ----------
+
+    #[test]
+    fn usage_reported_by_provider_is_kept() {
+        let stats = StreamStats { prompt_tokens: 120, completion_tokens: 40, reasoning_tokens: 5, ..Default::default() };
+        let u = resolve_usage(&stats, 999, "anything");
+        assert_eq!(u, ResolvedUsage { prompt: 120, completion: 40, reasoning: 5, estimated: false });
+    }
+
+    #[test]
+    fn missing_usage_with_output_is_estimated() {
+        // 取消 / usage chunk 缺失:有正文但 0 token
+        let stats = StreamStats { first_content_ms: Some(300), ..Default::default() };
+        let raw = "<t id=\"1\">你好世界</t>"; // 13 ASCII + 4 CJK → (39 + 24 + 9) / 10 = 7
+        let u = resolve_usage(&stats, 250, raw);
+        assert_eq!(u, ResolvedUsage { prompt: 250, completion: 7, reasoning: 0, estimated: true });
+    }
+
+    #[test]
+    fn missing_usage_with_only_thinking_is_estimated() {
+        let stats = StreamStats { reasoning_chars: 101, ..Default::default() };
+        let u = resolve_usage(&stats, 80, "");
+        assert_eq!(u, ResolvedUsage { prompt: 80, completion: 51, reasoning: 51, estimated: true });
+    }
+
+    #[test]
+    fn nothing_produced_stays_zero() {
+        // 连接即失败 / 尚未产出就被顶替:不估算,record_usage 会跳过入库
+        let u = resolve_usage(&StreamStats::default(), 300, "");
+        assert_eq!(u, ResolvedUsage { prompt: 0, completion: 0, reasoning: 0, estimated: false });
+    }
+
 }

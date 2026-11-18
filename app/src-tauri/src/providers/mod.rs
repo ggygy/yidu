@@ -31,6 +31,22 @@ pub struct StreamStats {
     pub first_content_ms: Option<i64>,
     /// 本次请求探明「关思考字段不被支持」并已去字段重试 → 调用方写回 providers.extra
     pub thinking_unsupported: bool,
+    /// 已收到的思考文本字数(服务商不报 usage 时用来估算思考 token)
+    pub reasoning_chars: i64,
+}
+
+/// 服务商没报 usage(流被取消、usage chunk 缺失、流中途出错)时按字数估算 token(验收 F10)。
+/// 经验口径:ASCII 约 0.3 token/字符,其余(中日韩等)约 0.6 token/字符,向上取整。只是近似,入库时标 estimated。
+pub fn estimate_tokens(text: &str) -> i64 {
+    let (mut ascii, mut other) = (0i64, 0i64);
+    for c in text.chars() {
+        if c.is_ascii() {
+            ascii += 1;
+        } else {
+            other += 1;
+        }
+    }
+    (ascii * 3 + other * 6 + 9) / 10
 }
 
 /// 流式请求计时器:send 前创建,载荷到达时打点
@@ -55,7 +71,10 @@ impl Timing {
     pub fn observe(&self, p: &SsePayload, stats: &mut StreamStats) {
         match p {
             SsePayload::Delta(_) => self.mark(&mut stats.first_content_ms),
-            SsePayload::Reasoning(_) => self.mark(&mut stats.first_reasoning_ms),
+            SsePayload::Reasoning(r) => {
+                self.mark(&mut stats.first_reasoning_ms);
+                stats.reasoning_chars += r.chars().count() as i64;
+            }
             _ => {}
         }
     }
@@ -265,4 +284,12 @@ mod tests {
         let m2 = chat_messages("sys", &[h[0].clone()], "u2");
         assert_eq!(m.as_array().unwrap()[0..3], m2.as_array().unwrap()[0..3]);
     }
+
+    #[test]
+    fn estimate_tokens_mixes_ascii_and_cjk() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("hello world"), 4); // 11 × 0.3 = 3.3 → 4
+        assert_eq!(estimate_tokens("翻译"), 2); // 2 × 0.6 = 1.2 → 2
+    }
+
 }
