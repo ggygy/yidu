@@ -25,6 +25,11 @@ use tauri_plugin_window_state::{Builder as WindowStateBuilder, StateFlags};
 /// ⌥T 唤出语义(§2.4.1):已在前台且有焦点 → 隐藏;否则移到当前桌面、取消最小化、激活应用、置前并聚焦
 /// (v0.2 只看 is_visible:被遮挡 / 在别的桌面 / 最小化时反而把它藏起来)
 pub fn toggle_quick(app: &tauri::AppHandle) {
+    // 缩成图标时:⌥T / 托盘 = 展开
+    if native::mini_visible(app) {
+        native::expand_quick(app);
+        return;
+    }
     let Some(q) = app.get_webview_window("quick") else { return };
     let visible = q.is_visible().unwrap_or(false);
     let focused = q.is_focused().unwrap_or(false);
@@ -186,7 +191,7 @@ pub fn run() {
         .plugin(
             WindowStateBuilder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE) // 重启不自动显示快捷窗
-                .with_denylist(&["settings"]) // 设置窗固定尺寸、每次居中
+                .with_denylist(&["settings", "quick-mini"]) // 设置窗固定尺寸、每次居中;缩小图标跟随快捷窗定位
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -274,6 +279,8 @@ pub fn run() {
             commands::hotkey_status,
             commands::get_accent,
             commands::open_settings,
+            commands::quick_minimize,
+            commands::quick_expand,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

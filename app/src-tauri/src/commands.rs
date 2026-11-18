@@ -644,3 +644,17 @@ pub fn thinking_preview(form: ProviderForm) -> String {
 pub fn reset_block(state: State<AppState>, article_id: i64, idx: usize) -> Result<(), String> {
     state.db.reset_block(article_id, idx).map_err(err)
 }
+
+/// 快捷窗一键缩小为悬浮图标(翻译在后台照常进行)
+#[tauri::command]
+pub async fn quick_minimize(app: tauri::AppHandle) -> Result<(), String> {
+    let a = app.clone();
+    app.run_on_main_thread(move || crate::native::minimize_quick(&a)).map_err(err)
+}
+
+/// 点悬浮图标:展开回快捷窗
+#[tauri::command]
+pub async fn quick_expand(app: tauri::AppHandle) -> Result<(), String> {
+    let a = app.clone();
+    app.run_on_main_thread(move || crate::native::expand_quick(&a)).map_err(err)
+}

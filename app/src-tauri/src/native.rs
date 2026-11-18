@@ -246,11 +246,18 @@ fn on_menu(app: &AppHandle, e: tauri::menu::MenuEvent) {
 
 /// 快捷窗:唤出时移到当前桌面(含全屏应用之上),而不是把用户拽回它所在的桌面
 pub fn setup_quick_window(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
     if let Some(q) = app.get_webview_window("quick") {
+        follow_active_space(&q);
+    }
+}
+
+/// 唤出时移到当前桌面、可浮在全屏应用之上(快捷窗与其缩小图标共用)
+fn follow_active_space(w: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
         use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
-        if let Ok(ptr) = q.ns_window() {
-            // SAFETY:tauri 返回的是该窗口有效的 NSWindow 指针;setup 在主线程执行
+        if let Ok(ptr) = w.ns_window() {
+            // SAFETY:tauri 返回的是该窗口有效的 NSWindow 指针;调用方都在主线程
             let win: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
             let b = win.collectionBehavior();
             win.setCollectionBehavior(
@@ -258,7 +265,129 @@ pub fn setup_quick_window(app: &AppHandle) {
             );
         }
     }
-    let _ = app;
+    let _ = w;
+}
+
+// ---------- 快捷窗一键缩小为图标 ----------
+
+pub const MINI: &str = "quick-mini";
+/// 图标窗边长(逻辑点);图标本体 44,四周留阴影余量
+const MINI_SIZE: f64 = 56.0;
+/// 图标与快捷窗右上角的内缩(逻辑点)
+const MINI_INSET: f64 = 10.0;
+
+/// 缩小:快捷窗隐藏,原处右上角出现一个可拖动的悬浮图标;快捷窗网页照常运行(翻译不中断)
+pub fn minimize_quick(app: &AppHandle) {
+    let Some(q) = app.get_webview_window("quick") else { return };
+    let Some(mini) = mini_window(app) else { return };
+    if let (Ok(pos), Ok(size), Ok(scale)) = (q.outer_position(), q.outer_size(), q.scale_factor()) {
+        let (x, y) = mini_anchor(pos.x, pos.y, size.width as i32, scale);
+        let _ = mini.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+    remember_quick_pos(app);
+    let _ = q.hide();
+    let _ = mini.show();
+    update_dock(app);
+}
+
+/// 展开:图标隐藏,快捷窗以「右上角对齐图标」的位置重新出现(图标被拖走时,快捷窗跟到那里),越界夹回
+pub fn expand_quick(app: &AppHandle) {
+    let Some(q) = app.get_webview_window("quick") else { return };
+    if let Some(mini) = app.get_webview_window(MINI) {
+        if let (Ok(mpos), Ok(qsize), Ok(scale)) = (mini.outer_position(), q.outer_size(), q.scale_factor()) {
+            let (x, y) = quick_from_mini(mpos.x, mpos.y, qsize.width as i32, scale);
+            let (x, y) = match mini.current_monitor() {
+                Ok(Some(m)) => {
+                    let wa = m.work_area();
+                    clamp_into(x, y, qsize.width as i32, qsize.height as i32, wa.position.x, wa.position.y, wa.size.width as i32, wa.size.height as i32)
+                }
+                _ => (x, y),
+            };
+            let _ = q.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        let _ = mini.hide();
+    }
+    let _ = q.unminimize();
+    let _ = q.show();
+    let _ = q.set_focus();
+    update_dock(app);
+}
+
+pub fn mini_visible(app: &AppHandle) -> bool {
+    app.get_webview_window(MINI).and_then(|w| w.is_visible().ok()).unwrap_or(false)
+}
+
+/// 图标窗懒创建:无边框、透明、置顶、不进程序坞切换器、不抢焦点
+fn mini_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(w) = app.get_webview_window(MINI) {
+        return Some(w);
+    }
+    let builder = WebviewWindowBuilder::new(app, MINI, WebviewUrl::App("mini.html".into()))
+        .title("译读")
+        .inner_size(MINI_SIZE, MINI_SIZE)
+        .resizable(false)
+        .minimizable(false)
+        .maximizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false);
+    match builder.build() {
+        Ok(w) => {
+            follow_active_space(&w);
+            Some(w)
+        }
+        Err(e) => {
+            eprintln!("[译读] 创建缩小图标窗口失败:{e}");
+            None
+        }
+    }
+}
+
+/// 快捷窗外框 (x, y, 宽) → 图标位置:贴右上角内缩(物理像素)
+fn mini_anchor(qx: i32, qy: i32, qw: i32, scale: f64) -> (i32, i32) {
+    let size = (MINI_SIZE * scale).round() as i32;
+    let inset = (MINI_INSET * scale).round() as i32;
+    (qx + qw - size - inset, qy + inset)
+}
+
+/// mini_anchor 的逆运算:图标位置 → 快捷窗位置
+fn quick_from_mini(mx: i32, my: i32, qw: i32, scale: f64) -> (i32, i32) {
+    let size = (MINI_SIZE * scale).round() as i32;
+    let inset = (MINI_INSET * scale).round() as i32;
+    (mx - qw + size + inset, my - inset)
+}
+
+/// 把 (w×h) 的窗夹回可用区域 (ax, ay, aw, ah) 内;比区域还大时贴左上
+fn clamp_into(x: i32, y: i32, w: i32, h: i32, ax: i32, ay: i32, aw: i32, ah: i32) -> (i32, i32) {
+    (x.min(ax + aw - w).max(ax), y.min(ay + ah - h).max(ay))
+}
+
+#[cfg(test)]
+mod mini_tests {
+    use super::*;
+
+    #[test]
+    fn mini_sits_in_quick_top_right_and_round_trips() {
+        for scale in [1.0, 2.0] {
+            let (mx, my) = mini_anchor(100, 200, 880, scale);
+            assert_eq!((mx, my), (100 + 880 - (56.0 * scale) as i32 - (10.0 * scale) as i32, 200 + (10.0 * scale) as i32));
+            assert_eq!(quick_from_mini(mx, my, 880, scale), (100, 200));
+        }
+    }
+
+    #[test]
+    fn clamp_keeps_window_on_screen() {
+        // 图标被拖到屏幕最左上 → 快捷窗会算出负坐标,夹回 (0,25)
+        assert_eq!(clamp_into(-700, 5, 880, 1320, 0, 25, 2880, 1775), (0, 25));
+        // 超出右下 → 贴右下
+        assert_eq!(clamp_into(2500, 900, 880, 1320, 0, 25, 2880, 1775), (2000, 480));
+        // 比可用区域还高 → 贴顶
+        assert_eq!(clamp_into(10, 10, 880, 2000, 0, 25, 2880, 1775), (10, 25));
+    }
 }
 
 /// Dock 图标:主窗或设置窗可见 = Regular;只剩快捷窗 = Accessory(无 Dock 图标,唤出不切桌面)
