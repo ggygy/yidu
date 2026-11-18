@@ -1,0 +1,40 @@
+app/src/mini/main.tsx
+  s_4d4673cc993b4c::t_39a8826c34183f 1-63
+app/src/icons.tsx
+  s_4d4673cc993b4c::t_dd9cf5e8dd7e12 16
+app/src-tauri/src/commands.rs
+  s_4d4673cc993b4c::t_89e853825db7f9 647-660
+app/src/styles.css
+  s_4d4673cc993b4c::t_dd9cf5e8dd7e12 306
+  s_4d4673cc993b4c::t_39a8826c34183f 284-305,307-309
+app/src/quick/main.tsx
+  s_4d4673cc993b4c::t_dd9cf5e8dd7e12 5-6,244-263
+  s_4d4673cc993b4c::t_31885168cf7601 398
+app/src-tauri/src/native.rs
+  s_4d4673cc993b4c::t_89e853825db7f9 250-257,259-260,268-389
+app/src-tauri/src/lib.rs
+  s_4d4673cc993b4c::t_89e853825db7f9 28-32,282-283
+  s_4d4673cc993b4c::t_0e615f3300af28 194
+app/mini.html
+  s_4d4673cc993b4c::t_39a8826c34183f 1-13
+app/src-tauri/capabilities/default.json
+  s_4d4673cc993b4c::t_89e853825db7f9 5
+app/vite.config.ts
+  s_4d4673cc993b4c::t_89e853825db7f9 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "ecdf75ad65bcac3441d62c14f91803d491d97497",
+  "prompts": {},
+  "sessions": {
+    "s_4d4673cc993b4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e30b449d-cf10-4e4e-8619-4fa650db551a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
