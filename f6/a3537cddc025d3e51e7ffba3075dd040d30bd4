@@ -1,0 +1,24 @@
+app/src/styles.css
+  s_4d4673cc993b4c::t_ab35c90d1093af 124-128
+  s_4d4673cc993b4c::t_ba94ea8a2c418f 293,295-301,303-314,317-318,320-321
+app/src/mini/main.tsx
+  s_4d4673cc993b4c::t_ba94ea8a2c418f 56-61
+app/src/main.tsx
+  s_4d4673cc993b4c::t_984de229d2e736 620
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "f6a3537cddc025d3e51e7ffba3075dd040d30bd4",
+  "prompts": {},
+  "sessions": {
+    "s_4d4673cc993b4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e30b449d-cf10-4e4e-8619-4fa650db551a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
