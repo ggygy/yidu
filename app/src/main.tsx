@@ -617,7 +617,7 @@ function App() {
               )}
 
               {doc && streamErr && (
-                <div className="text-danger text-[12px] bg-surface2 rounded-md px-3 py-2" onClick={() => setStreamErr(null)} title="点击关闭">
+                <div className="text-danger text-[12px] bg-surface2 rounded-md px-3 py-2 cursor-pointer" onClick={() => setStreamErr(null)} title="点击关闭">
                   {streamErr}{!busy && pendingCount > 0 && " · 可续译未完成块"}
                 </div>
               )}
