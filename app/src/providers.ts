@@ -6,7 +6,7 @@ export type Preset = { kind: string; base_url: string; model: string; hint: stri
 
 // 预设(2026-11;模型以拉取到的 /models 为准,这里只是首个默认值)
 export const PRESETS: Record<string, Preset> = {
-  DeepSeek: { kind: "openai_compatible", base_url: "https://api.deepseek.com", model: "deepseek-chat", hint: "api.deepseek.com" },
+  DeepSeek: { kind: "openai_compatible", base_url: "https://api.deepseek.com", model: "deepseek-v4-flash", hint: "api.deepseek.com" },
   "GLM(智谱)": { kind: "openai_compatible", base_url: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4.5-flash", hint: "open.bigmodel.cn" },
   OpenAI: { kind: "openai_compatible", base_url: "https://api.openai.com/v1", model: "gpt-5-mini", hint: "api.openai.com" },
   "Ollama(本地)": { kind: "ollama", base_url: "http://localhost:11434", model: "qwen3:4b", hint: "localhost:11434 · 免密钥" },

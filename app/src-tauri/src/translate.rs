@@ -121,12 +121,20 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
         Some(id) => id,
         None => {
             // 纯文本粘贴:段内单换行保留为硬换行、行首 md 记号转义(§2.2.5)
-            let plain = match req.format.as_deref() {
+            // 自动判定下整段是 JSON:包成代码块直通,不送模型(验收 F9:20 万字 JSON 曾被当一个段落整块送译)
+            let json = req.format.as_deref().map_or(true, |f| f == "auto") && blocks::looks_like_json(&req.text);
+            let plain = !json && match req.format.as_deref() {
                 Some("plain") => true,
                 Some("md") => false,
                 _ => !blocks::looks_like_markdown(&req.text),
             };
-            let text = if plain { blocks::plain_to_markdown(&req.text) } else { req.text.clone() };
+            let text = if json {
+                format!("```json\n{}\n```", req.text.trim())
+            } else if plain {
+                blocks::plain_to_markdown(&req.text)
+            } else {
+                req.text.clone()
+            };
             let parsed = blocks::split_blocks(&text);
             if parsed.is_empty() {
                 return Err(anyhow!("没有可翻译的内容"));
@@ -397,7 +405,7 @@ impl BatchCtx<'_> {
     }
 
     /// 一次 HTTP 请求结束:写 usage_log(含计时埋点)并推 usage 事件
-    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>) {
+    fn record_usage(&self, stats: &StreamStats, elapsed_ms: i64, items: &[(usize, String)], first_block_ms: Option<i64>, sig_retry: bool) {
         if stats.thinking_unsupported {
             let _ = self.db.mark_provider_thinking_unsupported(self.provider_row.id);
         }
@@ -420,6 +428,7 @@ impl BatchCtx<'_> {
             batch_blocks: items.len() as i64,
             batch_chars: items.iter().map(|(_, s)| s.chars().count() as i64).sum(),
             model: self.provider_row.model.clone(),
+            sig_retry: if sig_retry { items.len() as i64 } else { 0 },
         });
         {
             let mut g = self.meter.lock().unwrap();
@@ -526,7 +535,7 @@ impl BatchCtx<'_> {
                     while let Ok(p) = rx.try_recv() {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some());
                     self.log_unparsed(&out, &raw, items.len());
                     let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));
@@ -536,7 +545,7 @@ impl BatchCtx<'_> {
                     while let Ok(p) = rx.try_recv() {
                         process_payload(self, p, items, &mut machine, &mut raw, &mut out, &t0, &mut first_block_ms);
                     }
-                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms);
+                    self.record_usage(&stats, t0.elapsed().as_millis() as i64, items, first_block_ms, note.is_some());
                     self.log_unparsed(&out, &raw, items.len());
                     let (out, raw) = single_fallback(out, raw, items.len());
                     return Ok((out, raw, stats));

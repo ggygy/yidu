@@ -90,7 +90,7 @@ export function ModelsSection({ providers, refreshProviders, say }: { providers:
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
                     <span className="text-[13px] truncate">{p.name}</span>
-                    {p.is_active && <span className={"text-[11px] px-1.5 rounded-full whitespace-nowrap " + (on ? "bg-white/25" : "bg-accentsoft text-accent")}>使用中</span>}
+                    {p.is_active && <span className={"text-[11px] px-1.5 rounded-full whitespace-nowrap " + (on ? "ring-1 ring-inset ring-[color-mix(in_srgb,var(--on-accent)_60%,transparent)]" : "bg-accentsoft text-accenttx")}>使用中</span>}
                   </span>
                   <span className="sub block text-[11px] font-code truncate">{p.model || "未选模型"}</span>
                 </span>
@@ -264,7 +264,7 @@ function Detail({ p, providers, refreshProviders, say, focusKey, onTested, onDel
     <div className="min-w-0">
       <div className="flex items-center gap-2 mb-3">
         <input className="field !h-[26px] !text-[15px] font-semibold !bg-transparent !border-transparent focus:!border-accent flex-1 min-w-0" value={name} onChange={(e) => { setName(e.target.value); scheduleSave(e.target.value, base, model); }} spellCheck={false} />
-        {p.is_active && <span className="text-[11px] px-2 py-0.5 rounded bg-accentsoft text-accent whitespace-nowrap">使用中</span>}
+        {p.is_active && <span className="text-[11px] px-2 py-0.5 rounded bg-accentsoft text-accenttx whitespace-nowrap">使用中</span>}
       </div>
 
       <div className="gl">
