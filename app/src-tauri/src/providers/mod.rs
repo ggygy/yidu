@@ -15,7 +15,7 @@ use std::time::Duration;
 /// 取消旗标:task 侧构造 Arc<AtomicU64 比对> 的闭包传入
 pub type CancelCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct StreamStats {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
@@ -222,6 +222,20 @@ pub fn temperature_of(extra: &str) -> f64 {
         .filter(|t| t.is_finite())
         .map(|t| t.clamp(0.0, 2.0))
         .unwrap_or(DEFAULT_TEMPERATURE)
+}
+
+/// 首字超时并发重发(验收 F11):等这么久仍无任何输出,就并发再发一个同样的请求,谁先出字用谁
+pub const HEDGE_AFTER_MS: u64 = 4000;
+
+/// 是否启用并发重发:本地 Ollama 恒关(重发只会加倍本机负载);其余默认开,extra.hedge=false 可关
+pub fn hedge_enabled(kind: &str, extra: &str) -> bool {
+    if kind == "ollama" {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(extra)
+        .ok()
+        .and_then(|v| v.get("hedge").and_then(|h| h.as_bool()))
+        .unwrap_or(true)
 }
 
 /// 组装 messages:system → 历史轮次 → 本次 user
