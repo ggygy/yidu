@@ -8,7 +8,7 @@ import { Md, PassBlock } from "../md";
 import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "../blocks";
 import { Icon } from "../icons";
 import * as api from "../api";
-import { dirLabel, dirShort, detectDir } from "../languages";
+import { LANGS, autoDirection, autoLabel, dirLabel, dirShort, langShort, langZh, makeDir, targetFor } from "../languages";
 import { DirPicker } from "../dirselect";
 import { IS_MAC, initNative } from "../native";
 import { Segmented, TbButton } from "../ui";
@@ -62,6 +62,7 @@ function QuickApp() {
   const docRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [onceDir, setOnceDir] = useState<string | null>(null); // 自动模式下「只改这一次」的方向(§2.1.5),新翻译清掉
   const [lastSrc, setLastSrc] = useState(""); // 上次翻译的原文:输入改了才把主按钮切回「翻译」
   const [expandProv, setExpandProv] = useState<number | null>(null); // 模型菜单里展开的服务商
   const [provModels, setProvModels] = useState<Record<number, string[] | "busy" | string>>({});
@@ -161,7 +162,7 @@ function QuickApp() {
     }
   };
 
-  const fire = async (text = input) => {
+  const fire = async (text = input, once: string | null = null) => {
     if (!text.trim()) return;
     autoGrowRef.current = true; // 新翻译恢复自动长高
     setSrcOpen(false);
@@ -174,7 +175,8 @@ function QuickApp() {
     setLive(startLive());
     setInfoOpen(false);
     setLastSrc(text);
-    const effDir = direction === "auto" ? detectDir(text) : direction;
+    setOnceDir(once);
+    const effDir = once ?? (direction === "auto" ? autoDirection(text, prefs?.native_lang, prefs?.second_lang).dir : direction);
     try {
       sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste", format: fmt as "auto" | "md" | "plain" }, onEvent);
     } catch (e) {
@@ -269,10 +271,18 @@ function QuickApp() {
   }, [dirOpen, provOpen, phase]);
 
   const autoDir = direction === "auto";
-  // 「自动(英语)→ 中文」:有输入时显示识别结果,否则只显示「自动」
+  // 「自动 · 中 → EN」,低置信加「?」;本次手改过则显示手改的方向(仍是自动)
+  const native = prefs?.native_lang ?? "zh", second = prefs?.second_lang ?? "en";
+  const autoInfo = autoDir && input.trim() ? autoDirection(input, native, second) : null;
+  const onceActive = autoDir && onceDir && input.trim() === lastSrc.trim() ? onceDir : null;
   const dirText = autoDir
-    ? input.trim() ? (() => { const [a, b] = dirLabel(detectDir(input)).split(" → "); return `自动(${a})→ ${b}`; })() : "自动识别"
+    ? onceActive ? `自动 · ${dirShort(onceActive)}(本次)` : autoInfo ? autoLabel(autoInfo) : "自动识别"
     : dirShort(direction);
+  /** 只改这一次:以该方向重译当前文本,保持自动(§2.1.5) */
+  const retranslateAs = (src: string) => {
+    setDirOpen(false);
+    if (input.trim()) fire(input, makeDir(src, targetFor(src, native, second)));
+  };
 
   // ---------- 自动长高(§2.5.1–3) ----------
   // 宽不动;高随内容(含流式)增长,220ms ease-out,上限 85% 屏高后内部滚动;清空缩回。
@@ -380,7 +390,45 @@ function QuickApp() {
           </button>
           {dirOpen && (
             <div className="menu absolute z-30 top-full mt-1 left-0 !p-2.5" onClick={(e) => e.stopPropagation()}>
-              <DirPicker value={direction} onChange={(d) => { setDirection(d); setDirOpen(false); savePrefs({ direction: d }).catch(() => {}); }} />
+              {autoDir ? (
+                <div className="w-[264px] flex flex-col text-[12px]">
+                  <p className="m-0 px-1 pb-1.5 text-t2">
+                    {autoInfo
+                      ? <>识别为 <b className="font-medium text-t1">{langZh(autoInfo.src)}</b>{autoInfo.low ? " · 把握不大(只告诉模型目标语)" : ` · 置信 ${Math.round(autoInfo.conf * 100)}%`}</>
+                      : "自动识别源语言:母语 → 第二语言,其余 → 母语"}
+                  </p>
+                  {autoInfo?.maybeJa && (
+                    <button onClick={() => retranslateAs("ja")}>
+                      <span className="w-3 flex-none" />可能是日文 → {langShort("ja")} → {langShort(targetFor("ja", native, second))} 重译
+                    </button>
+                  )}
+                  {input.trim() && (
+                    <>
+                      <p className="m-0 px-1 pt-1.5 pb-1 text-[11px] text-t3">本次按其他源语言重译(仍保持自动)</p>
+                      <div className="flex flex-wrap gap-1 px-1 pb-1.5">
+                        {LANGS.filter((l) => l.code !== (onceActive ? onceActive.split("2")[0] : autoInfo?.src)).map((l) => (
+                          <button key={l.code} className="!w-auto !h-[22px] !px-2 rounded-md bg-surface2" onClick={() => retranslateAs(l.code)}>
+                            {l.short} → {langShort(targetFor(l.code, native, second))}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <hr />
+                  <button
+                    title="退出自动,固定为一个方向"
+                    onClick={() => {
+                      const d = onceActive && !onceActive.startsWith("?") ? onceActive
+                        : autoInfo && !autoInfo.low ? autoInfo.dir : makeDir(second, native);
+                      setDirection(d); savePrefs({ direction: d }).catch(() => {});
+                    }}
+                  >
+                    <span className="w-3 flex-none" />改为固定方向…
+                  </button>
+                </div>
+              ) : (
+                <DirPicker value={direction} onChange={(d) => { setDirection(d); setDirOpen(false); savePrefs({ direction: d }).catch(() => {}); }} />
+              )}
             </div>
           )}
         </div>
@@ -491,7 +539,7 @@ function QuickApp() {
         {err && <p className="text-danger text-[12px] bg-surface2 rounded-md px-2.5 py-2 m-0">{err}</p>}
         {!blocks.length && !err && (
           <p className="text-t3 text-[12px] m-0">
-            {streaming ? <>连接中 <span className="caret" /></> : `译文将逐块流式显示,并自动存入文章库 · ${autoDir ? (input.trim() ? dirLabel(detectDir(input)) : "自动识别语言") : dirLabel(direction)}`}
+            {streaming ? <>连接中 <span className="caret" /></> : `译文将逐块流式显示,并自动存入文章库 · ${autoInfo ? dirLabel(makeDir(autoInfo.src, autoInfo.to)) : autoDir ? "自动识别语言" : dirLabel(direction)}`}
           </p>
         )}
         {units.map((u) =>

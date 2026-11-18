@@ -115,6 +115,8 @@ export interface Prefs {
   concurrency: number; // 并发批次 1–3(Ollama 恒 1)
   cached_price_per_mtok: number | null; // 缓存命中输入单价;null = 按普通单价
   batch_mode: "speed" | "cache"; // 速度优先(独立请求、并发)/ 缓存优先(连续对话、串行)
+  native_lang: string; // §2.1 母语(默认 zh):自动方向下,源 = 母语 → 译第二语言,否则 → 译母语
+  second_lang: string; // 第二语言(默认 en)
 }
 
 export interface DictSense {

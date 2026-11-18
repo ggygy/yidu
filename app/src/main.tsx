@@ -6,7 +6,7 @@ import { Md, PassBlock, type TermHit } from "./md";
 import { copyText, isPassthrough, linkDefs, toUnits, type Unit } from "./blocks";
 import { Icon } from "./icons";
 import * as api from "./api";
-import { dirLabel, langZh, splitDir, detectDir } from "./languages";
+import { dirLabel, langZh, splitDir, autoDirection } from "./languages";
 import { DirPicker } from "./dirselect";
 import { IS_MAC, initNative } from "./native";
 import { applyReading, stepScale } from "./reader";
@@ -394,7 +394,7 @@ function App() {
     if (!draft.trim()) return;
     setComposing(false);
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
-    const effDir = direction === "auto" ? detectDir(draft) : direction;
+    const effDir = direction === "auto" ? autoDirection(draft, prefs?.native_lang, prefs?.second_lang).dir : direction;
     try {
       setSessUsage(EMPTY_USAGE);
       setLive(startLive());
@@ -703,6 +703,14 @@ function App() {
               <div className="h-[46px] flex-none flex items-center gap-2.5 px-4 border-t-[0.5px] border-line">
                 <span className="text-[11px] text-t3 whitespace-nowrap">{draft.length} 字</span>
                 <DirPicker value={direction} onChange={(d) => { setDirection(d); applyPrefs({ direction: d }); }} />
+                {direction === "auto" && draft.trim() && (() => {
+                  const a = autoDirection(draft, prefs?.native_lang, prefs?.second_lang);
+                  return (
+                    <span className="text-[11px] text-t3 whitespace-nowrap" title={a.low ? "识别把握不大:提示词只写目标语,由模型自行判断源语言" : `置信 ${Math.round(a.conf * 100)}%`}>
+                      {langZh(a.src)} → {langZh(a.to)}{a.low && " ?"}
+                    </span>
+                  );
+                })()}
                 <Segmented value={draftFmt} options={[["auto", "自动"], ["md", "Markdown"], ["plain", "纯文本"]] as const} onChange={setDraftFmt} />
                 <span className="flex-1" />
                 <button className="btn" onClick={() => setComposing(false)}>取消</button>

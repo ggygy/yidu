@@ -7,6 +7,7 @@ import { check as checkUpdateFn } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import * as api from "../api";
 import { DirPicker } from "../dirselect";
+import { LANGS, langZh } from "../languages";
 import { initNative } from "../native";
 import { SCALE_MAX, SCALE_MIN, stepScale } from "../reader";
 import { estimateCost } from "../metrics";
@@ -125,6 +126,15 @@ function SettingsApp() {
 
 // ---------- 翻译(含外观) ----------
 
+function LangSelect({ value, exclude, onChange }: { value: string; exclude?: string; onChange: (v: string) => void }) {
+  return (
+    <select className="field !h-[24px] !text-[12px] !px-1.5" value={value} onChange={(e) => onChange(e.target.value)}>
+      {!LANGS.some((l) => l.code === value) && <option value={value}>{langZh(value)}</option>}
+      {LANGS.filter((l) => l.code !== exclude).map((l) => <option key={l.code} value={l.code}>{l.zh}</option>)}
+    </select>
+  );
+}
+
 function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPrefs: (u: Partial<Prefs>) => void; say: (m: string) => void }) {
   const [promptDraft, setPromptDraft] = useState("");
   useEffect(() => { setPromptDraft(prefs?.custom_prompt ?? ""); }, [prefs?.custom_prompt]);
@@ -133,6 +143,14 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
     <>
       <Group title="翻译">
         <Row label="默认方向"><DirPicker value={prefs?.direction ?? "en2zh"} onChange={(d) => applyPrefs({ direction: d })} /></Row>
+        <Row label="母语 / 第二语言">
+          <span className="text-t3 text-[12px] whitespace-nowrap">自动识别:母语原文 → 译第二语言,其余 → 译母语</span>
+          <span className="inline-flex items-center gap-1.5 flex-none">
+            <LangSelect value={prefs?.native_lang ?? "zh"} onChange={(v) => applyPrefs({ native_lang: v })} />
+            <span className="text-t3 text-[12px]">/</span>
+            <LangSelect value={prefs?.second_lang ?? "en"} exclude={prefs?.native_lang ?? "zh"} onChange={(v) => applyPrefs({ second_lang: v })} />
+          </span>
+        </Row>
         <Row label="点词查词">免费词典 → 模型兜底<Toggle on={!!prefs?.dict_fallback} onClick={() => applyPrefs({ dict_fallback: !prefs?.dict_fallback })} /></Row>
         <Row label="长文分批">
           <Segmented

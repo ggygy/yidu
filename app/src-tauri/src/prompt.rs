@@ -3,6 +3,7 @@
 //      + protocol 段(应用强制附加,保证 <s>/<t> 协议管线完整,用户不可移除)
 //      + 术语表段(有术语才出现)
 // 方向编码:A2B;A/B 为语言代码(zh/en/ja/ko/fr/de/es/ru)或 "~显示名"(自定义语言,如 en2~泰语)
+// v0.3 §2.1.6:A = "?" 表示源语言未知(自动识别低置信),prompt 只写「译成 {to}」,from 为空串
 
 pub fn direction_parts(direction: &str) -> (String, String) {
     let (a, b) = direction.split_once('2').unwrap_or(("en", "zh"));
@@ -10,6 +11,9 @@ pub fn direction_parts(direction: &str) -> (String, String) {
 }
 
 fn seg_name(seg: &str, fallback: &str) -> String {
+    if seg == "?" {
+        return String::new();
+    }
     if let Some(name) = seg.strip_prefix('~') {
         let t = name.trim();
         if !t.is_empty() {
@@ -35,14 +39,19 @@ fn lang_name(code: &str) -> Option<&'static str> {
 }
 
 fn default_style_prompt(from: &str, to: &str) -> String {
+    // 源语言未知(低置信):不写源语,避免错误源语误导模型
+    let role = if from.is_empty() {
+        format!("You are a professional technical-document translator. Translate the text into {to}.")
+    } else {
+        format!("You are a professional {from}→{to} technical-document translator.")
+    };
     format!(
-        "You are a professional {from}→{to} technical-document translator.\n\n\
+        "{role}\n\n\
          Style rules:\n\
          1. Translate faithfully and completely; do not add explanations, prefaces, or closing remarks.\n\
          2. Keep proper nouns and product names in the source language unless they have a well-established {to} translation.\n\
-         3. Punctuation follows {to} conventions.",
-        from = from,
-        to = to,
+         3. Punctuation follows {to} conventions.\n\
+         4. If a segment is already entirely written in {to}, output it unchanged.",
     )
 }
 
@@ -57,7 +66,9 @@ fn protocol_block() -> &'static str {
 
 pub fn system_prompt(from: &str, to: &str, terms: &[(String, String)], custom: Option<&str>) -> String {
     let style = match custom.map(str::trim) {
-        Some(t) if !t.is_empty() => t.replace("{from}", from).replace("{to}", to),
+        Some(t) if !t.is_empty() => t
+            .replace("{from}", if from.is_empty() { "the source language" } else { from })
+            .replace("{to}", to),
         _ => default_style_prompt(from, to),
     };
     let mut s = style;
@@ -161,6 +172,18 @@ mod tests {
         let (from, to) = direction_parts("en2zh");
         let s = system_prompt(&from, &to, &[], Some("   \n  "));
         assert!(s.starts_with("You are a professional English→Simplified Chinese"));
+    }
+
+    #[test]
+    fn unknown_source_only_names_target() {
+        let (from, to) = direction_parts("?2en");
+        assert_eq!(from, "");
+        assert_eq!(to, "English");
+        let s = system_prompt(&from, &to, &[], None);
+        assert!(s.starts_with("You are a professional technical-document translator. Translate the text into English."));
+        assert!(!s.contains("→"));
+        let c = system_prompt(&from, &to, &[], Some("Translate {from} into {to}."));
+        assert!(c.starts_with("Translate the source language into English."));
     }
 
     #[test]
