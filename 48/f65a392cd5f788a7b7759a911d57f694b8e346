@@ -1,0 +1,21 @@
+app/src/settings/main.tsx
+  s_078392dfaaf413::t_e1b9dce6f337fe 139,144,151
+app/src-tauri/src/commands.rs
+  s_078392dfaaf413::t_e1b9dce6f337fe 356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "48f65a392cd5f788a7b7759a911d57f694b8e346",
+  "prompts": {},
+  "sessions": {
+    "s_078392dfaaf413": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c81f6b8-f1af-4ec5-ad4a-f54f2335a07d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
