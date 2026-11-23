@@ -264,6 +264,11 @@ jobs:
             console.log("latest.json 已生成");
           ' "$VER" "$TAG" "$ARM_SIG" "$X64_SIG" "$WIN_SIG" "$NOTES"
 
+      # 用 App 内置的 updater 公钥逐平台校验签名;不通过就不建 Release。
+      # 否则发出去的版本在应用内更新时必报「signature verification failed」。
+      - name: 校验 updater 签名(与 tauri.conf.json 公钥匹配)
+        run: node app/scripts/verify-updater-sig.mjs dist/latest.json dist
+
       - name: 创建 Release 并上传全部产物
         env:
           GH_TOKEN: ${{ github.token }}
