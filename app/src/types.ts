@@ -94,6 +94,22 @@ export interface HotkeyStatus {
   error: string | null;
 }
 
+/** 全局热键动作(v0.4):唤出快捷窗 / 划词翻译 / 截图翻译 / 翻译并替换选区 */
+export type HotkeyAction = "quick" | "selection" | "screenshot" | "replace";
+export type HotkeyMap = Partial<Record<HotkeyAction, HotkeyStatus>>;
+
+export interface OcrOutput {
+  text: string; // 空串 = 图里没识别到文字
+  engine: "system" | "model";
+  note: string | null; // 需要告诉用户的事(如模型识别失败已改用本机)
+}
+
+export interface PermissionStatus {
+  accessibility: boolean;
+  screen: boolean;
+  applicable: boolean; // false = 此平台无需授权(不显示权限界面)
+}
+
 export interface UsageSummary {
   requests: number;
   prompt_tokens: number;
@@ -118,6 +134,13 @@ export interface Prefs {
   batch_mode: "speed" | "cache"; // 速度优先(独立请求、并发)/ 缓存优先(连续对话、串行)
   native_lang: string; // §2.1 母语(默认 zh):自动方向下,源 = 母语 → 译第二语言,否则 → 译母语
   second_lang: string; // 第二语言(默认 en)
+  // v0.4:三个新热键(空串 = 停用)与 OCR 引擎
+  hotkey_selection: string;
+  hotkey_screenshot: string;
+  hotkey_replace: string;
+  ocr_engine: "system" | "model";
+  ocr_provider_id: number | null; // null = 跟随当前使用中的模型;写入时 0 = 清除
+  ocr_model: string; // 空 = 该服务商自己的模型
 }
 
 export interface DictSense {
@@ -149,6 +172,23 @@ export interface VocabEntry {
   source: string;
   created_at: number;
   examples: number;
+}
+
+/** 复习卡片(v0.6);评分三档,调度在 Rust srs.rs */
+export interface ReviewCard {
+  entry_id: number;
+  lemma: string;
+  phonetic: string;
+  definition: string;
+  is_new: boolean; // 还没复习过(占每日新词额度)
+  interval_days: number;
+  examples: string[];
+}
+export type ReviewGrade = "forgot" | "hard" | "good";
+export interface ReviewResult {
+  due_at: number;
+  interval_days: number;
+  remaining: number;
 }
 
 export interface GlossaryItem {

@@ -162,6 +162,29 @@ impl super::Provider for Ollama {
         out.sort();
         Ok(out)
     }
+
+    async fn transcribe_image(&self, image_b64: &str, _mime: &str) -> Result<String> {
+        let body = json!({
+            "model": self.model,
+            "stream": false,
+            "options": { "temperature": 0, "num_ctx": num_ctx(&self.extra) },
+            "messages": [{ "role": "user", "content": super::TRANSCRIBE_PROMPT, "images": [image_b64] }],
+        });
+        let resp = super::shared_client()
+            .post(self.chat_url())
+            .timeout(std::time::Duration::from_secs(180))
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("HTTP {status}: {}", text.chars().take(300).collect::<String>()));
+        }
+        let v: Value = resp.json().await?;
+        let content = v.pointer("/message/content").and_then(|c| c.as_str()).unwrap_or("");
+        Ok(super::strip_outer_fence(content))
+    }
 }
 
 #[cfg(test)]

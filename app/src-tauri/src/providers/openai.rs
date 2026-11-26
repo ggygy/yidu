@@ -143,4 +143,34 @@ impl super::Provider for OpenAiCompatible {
         out.sort();
         Ok(out)
     }
+
+    async fn transcribe_image(&self, image_b64: &str, mime: &str) -> Result<String> {
+        let body = json!({
+            "model": self.model,
+            "stream": false,
+            "temperature": 0,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": super::TRANSCRIBE_PROMPT },
+                    { "type": "image_url", "image_url": { "url": format!("data:{mime};base64,{image_b64}") } },
+                ],
+            }],
+        });
+        let resp = shared_client()
+            .post(chat_url(&self.base_url))
+            .bearer_auth(&self.api_key)
+            .timeout(std::time::Duration::from_secs(90))
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("HTTP {status}: {}", text.chars().take(300).collect::<String>()));
+        }
+        let v: Value = resp.json().await?;
+        let content = v.pointer("/choices/0/message/content").and_then(|c| c.as_str()).unwrap_or("");
+        Ok(super::strip_outer_fence(content))
+    }
 }

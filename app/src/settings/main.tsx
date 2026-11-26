@@ -13,7 +13,7 @@ import { SCALE_MAX, SCALE_MIN, stepScale } from "../reader";
 import { estimateCost } from "../metrics";
 import { Group, Row, Segmented, Toggle, fmtTokens, prettyAccel } from "../ui";
 import { ModelsSection } from "./models";
-import type { HotkeyStatus, Prefs, Provider, UsageReport } from "../types";
+import type { HotkeyAction, HotkeyMap, PermissionStatus, Prefs, Provider, UsageReport } from "../types";
 import "../styles.css";
 
 initNative();
@@ -115,7 +115,7 @@ function SettingsApp() {
         <div className="flex-1 overflow-y-auto px-6 pb-6">
           {section === "models" && <ModelsSection providers={providers} refreshProviders={refreshProviders} say={say} />}
           {section === "translate" && <TranslateSection prefs={prefs} applyPrefs={applyPrefs} say={say} />}
-          {section === "quick" && <QuickSection prefs={prefs} applyPrefs={applyPrefs} say={say} />}
+          {section === "quick" && <QuickSection prefs={prefs} providers={providers} applyPrefs={applyPrefs} say={say} />}
           {section === "usage" && <UsageSection prefs={prefs} applyPrefs={applyPrefs} say={say} />}
         </div>
       </main>
@@ -205,21 +205,36 @@ function TranslateSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; app
 
 // ---------- 快捷窗 ----------
 
-function QuickSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPrefs: (u: Partial<Prefs>) => Promise<void> | void; say: (m: string) => void }) {
-  const [capturing, setCapturing] = useState(false);
-  const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
+const HOTKEYS: { action: HotkeyAction; field: "hotkey" | "hotkey_selection" | "hotkey_screenshot" | "hotkey_replace"; label: string }[] = [
+  { action: "quick", field: "hotkey", label: "唤出快捷窗" },
+  { action: "selection", field: "hotkey_selection", label: "划词翻译" },
+  { action: "screenshot", field: "hotkey_screenshot", label: "截图翻译" },
+  { action: "replace", field: "hotkey_replace", label: "翻译并替换选中文字" },
+];
+
+function QuickSection({ prefs, providers, applyPrefs, say }: { prefs: Prefs | null; providers: Provider[]; applyPrefs: (u: Partial<Prefs>) => Promise<void> | void; say: (m: string) => void }) {
+  const [capturing, setCapturing] = useState<HotkeyAction | null>(null);
+  const [hotkeys, setHotkeys] = useState<HotkeyMap>({});
+  const [perms, setPerms] = useState<PermissionStatus | null>(null);
+  const [ocrModel, setOcrModel] = useState("");
+  useEffect(() => { setOcrModel(prefs?.ocr_model ?? ""); }, [prefs?.ocr_model]);
   useEffect(() => {
-    api.hotkeyStatus().then(setHotkey).catch(() => {});
-    const un = listen<HotkeyStatus>("hotkey-status", (e) => setHotkey(e.payload));
-    return () => { un.then((f) => f()); };
+    api.hotkeyStatus().then(setHotkeys).catch(() => {});
+    const un = listen<HotkeyMap>("hotkey-status", (e) => setHotkeys(e.payload));
+    // 权限状态:进入本页读一次;从系统设置切回来(窗口重新获焦)再读
+    const readPerms = () => api.permissionStatus().then(setPerms).catch(() => {});
+    readPerms();
+    window.addEventListener("focus", readPerms);
+    return () => { un.then((f) => f()); window.removeEventListener("focus", readPerms); };
   }, []);
 
   // 录制态捕获下一次组合键;Esc 取消
   useEffect(() => {
     if (!capturing) return;
+    const target = HOTKEYS.find((k) => k.action === capturing)!;
     const h = (e: KeyboardEvent) => {
       e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setCapturing(false); return; }
+      if (e.key === "Escape") { setCapturing(null); return; }
       const parts: string[] = [];
       if (e.metaKey) parts.push("CommandOrControl");
       if (e.ctrlKey) parts.push("Control");
@@ -232,23 +247,85 @@ function QuickSection({ prefs, applyPrefs, say }: { prefs: Prefs | null; applyPr
       if (!e.metaKey && !e.ctrlKey && !e.altKey) { say("快捷键须包含 ⌘ / ⌥ / ⌃ 之一"); return; }
       parts.push(k);
       const combo = parts.join("+");
-      setCapturing(false);
-      Promise.resolve(applyPrefs({ hotkey: combo })).then(() => say(`热键已改为 ${prettyAccel(combo)}`));
+      setCapturing(null);
+      const clash = HOTKEYS.find((o) => o.action !== target.action && prefs?.[o.field] === combo);
+      if (clash) { say(`${prettyAccel(combo)} 已用于「${clash.label}」`); return; }
+      // 注册失败时 Rust 侧不落库并报错(applyPrefs 已提示),这里只在真的改成了才报成功
+      api.setPrefs({ [target.field]: combo })
+        .then(() => say(`「${target.label}」已改为 ${prettyAccel(combo)}`))
+        .catch((err) => say(String(err)));
     };
     window.addEventListener("keydown", h, true);
     return () => window.removeEventListener("keydown", h, true);
   }, [capturing]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const bad = !!hotkey?.error;
+  const failed = HOTKEYS.filter((k) => hotkeys[k.action]?.error);
+  const ocrModelMode = prefs?.ocr_engine === "model";
+  const ocrProvider = providers.find((p) => p.id === prefs?.ocr_provider_id) ?? providers.find((p) => p.is_active);
   return (
     <>
-      <Group title="唤出" foot={bad ? <span className="text-danger">注册失败:{hotkey?.error}。多半被其他应用占用,请换一个组合键。</span> : "全局热键:在任何应用里按下即唤出快捷窗,再按一次隐藏。"}>
-        <Row label={bad ? "快捷键 · 注册失败" : "快捷键"} danger={bad}>
-          <span className={"font-medium " + (bad ? "text-danger" : "text-t1")}>{prettyAccel(prefs?.hotkey ?? "Alt+T")}</span>
-          <button className="btn" onClick={() => setCapturing(true)}>{capturing ? "按下组合键…(Esc 取消)" : "更改…"}</button>
-        </Row>
+      <Group
+        title="全局快捷键"
+        foot={failed.length
+          ? <span className="text-danger">注册失败:{failed.map((k) => `${k.label}(${hotkeys[k.action]?.error})`).join(";")}。多半被其他应用占用,请换一个组合键。</span>
+          : "在任何应用里按下即生效。划词翻译:先选中文字再按;截图翻译:按下后框选屏幕区域;翻译并替换:把选中的文字直接换成译文(原应用里可撤销)。"}
+      >
+        {HOTKEYS.map((k) => {
+          const accel = prefs?.[k.field] ?? "";
+          const bad = !!hotkeys[k.action]?.error;
+          return (
+            <Row key={k.action} label={bad ? `${k.label} · 注册失败` : k.label} danger={bad}>
+              <span className={"font-medium " + (bad ? "text-danger" : accel ? "text-t1" : "text-t3")}>{accel ? prettyAccel(accel) : "未设置"}</span>
+              <button className="btn" onClick={() => setCapturing(capturing === k.action ? null : k.action)}>{capturing === k.action ? "按下组合键…(Esc 取消)" : "更改…"}</button>
+              {k.action !== "quick" && accel && <button className="btn" onClick={() => applyPrefs({ [k.field]: "" })}>停用</button>}
+            </Row>
+          );
+        })}
       </Group>
-      <Group title="行为" foot="置顶与失焦自动隐藏互斥。重启后不自动显示快捷窗。">
+      {perms?.applicable && (
+        <Group title="系统权限" foot="译读只在你按下对应快捷键时读取选中文字或截取你框选的区域。屏幕录制授权后需重新打开译读才生效。">
+          <Row label="辅助功能(划词翻译 / 替换)">
+            {perms.accessibility ? <span className="text-t2">已授权</span> : <><span className="text-danger">未授权</span><button className="btn" onClick={() => api.permissionRequest("accessibility").then(setPerms).catch((e) => say(String(e)))}>去授权…</button></>}
+          </Row>
+          <Row label="屏幕录制(截图翻译)">
+            {perms.screen ? <span className="text-t2">已授权</span> : <><span className="text-danger">未授权</span><button className="btn" onClick={() => api.permissionRequest("screen").then(setPerms).catch((e) => say(String(e)))}>去授权…</button></>}
+          </Row>
+        </Group>
+      )}
+      <Group
+        title="图片文字识别"
+        foot={ocrModelMode
+          ? "由所选模型把图片转写成文字,再照常翻译;版面复杂时更准,但会消耗 token,且模型必须支持图片输入。识别失败会自动改用本机识别。"
+          : "用系统自带的识别引擎,免费、离线、约 1 秒;识别语言跟随翻译方向。截图翻译和粘贴图片都走这里。"}
+      >
+        <Row label="识别引擎">
+          <Segmented value={prefs?.ocr_engine ?? "system"} options={[["system", "本机(离线)"], ["model", "多模态模型"]] as const} onChange={(v) => applyPrefs({ ocr_engine: v })} />
+        </Row>
+        {ocrModelMode && (
+          <>
+            <Row label="模型服务">
+              <select
+                className="h-[24px] rounded-md bg-ctl border-none text-[13px] text-t1 px-1.5 max-w-[220px]"
+                value={prefs?.ocr_provider_id ?? 0}
+                onChange={(e) => applyPrefs({ ocr_provider_id: Number(e.target.value) })}
+              >
+                <option value={0}>跟随当前使用中的模型服务</option>
+                {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </Row>
+            <Row label="模型名" title="留空 = 用该服务当前的模型">
+              <input
+                className="h-[24px] w-[220px] rounded-md bg-ctl border-none text-[13px] text-t1 px-2 font-code"
+                value={ocrModel}
+                placeholder={ocrProvider?.model ?? "需支持图片输入"}
+                onChange={(e) => setOcrModel(e.target.value)}
+                onBlur={() => { if (ocrModel.trim() !== (prefs?.ocr_model ?? "")) applyPrefs({ ocr_model: ocrModel.trim() }); }}
+              />
+            </Row>
+          </>
+        )}
+      </Group>
+      <Group title="行为" foot="置顶与失焦自动隐藏互斥。重启后不自动显示快捷窗。划词与截图翻译不自动存入文章库,在快捷窗里点「存入文章库」才保存。">
         <Row label="粘贴即译"><Toggle on={!!prefs?.paste_auto} onClick={() => applyPrefs({ paste_auto: !prefs?.paste_auto })} /></Row>
         <Row label="默认置顶"><Toggle on={!!prefs?.pin_default} onClick={() => applyPrefs({ pin_default: !prefs?.pin_default })} /></Row>
         <Row label="失焦自动隐藏"><Toggle on={!!prefs?.blur_hide} onClick={() => applyPrefs({ blur_hide: !prefs?.blur_hide })} /></Row>

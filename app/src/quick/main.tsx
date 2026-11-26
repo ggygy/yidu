@@ -11,6 +11,7 @@ import { Icon } from "../icons";
 import * as api from "../api";
 import { LANGS, autoDirection, autoLabel, dirLabel, dirShort, langShort, langZh, makeDir, targetFor } from "../languages";
 import { DirPicker } from "../dirselect";
+import { VocabCard } from "../vocabcard";
 import { IS_MAC, initNative } from "../native";
 import { Segmented, TbButton } from "../ui";
 import { IDLE, LiveStatus, MetricsDetail, metricsLine, reduceLive, sec, startLive, type Live } from "../metrics";
@@ -42,6 +43,22 @@ function useLocalFlag(key: string, init: boolean) {
   const [v, setV] = useState(() => (localStorage.getItem(key) === null ? init : localStorage.getItem(key) === "1"));
   return [v, (n: boolean) => { localStorage.setItem(key, n ? "1" : "0"); setV(n); }] as const;
 }
+
+/** 划到的是单个英文词:走词典卡而不是模型(spec §2.4) */
+const isSingleWord = (t: string) => /^[A-Za-z][A-Za-z'’-]{0,39}$/.test(t.trim());
+
+const PERM_TEXT = {
+  accessibility: {
+    title: "需要「辅助功能」权限",
+    body: "划词翻译要读取你在其他应用里选中的文字。译读只在你按下快捷键的那一刻读取选区,不做其他事。",
+    after: "勾选「译读」后回到这里,再按一次快捷键即可。",
+  },
+  screen: {
+    title: "需要「屏幕录制」权限",
+    body: "截图翻译要截取你框选的屏幕区域。没有这项权限时,系统只会给出桌面背景,所以识别不到文字。",
+    after: "勾选「译读」后需要退出并重新打开译读才会生效。也可以先把截图粘贴(⌘V)到这里来翻译。",
+  },
+} as const;
 
 type QView = "zh" | "pair" | "src";
 const QVIEWS = [["zh", "译文"], ["pair", "对照"], ["src", "原文"]] as const;
@@ -75,7 +92,13 @@ function QuickApp() {
   const [dirOpen, setDirOpen] = useState(false);
   const [provOpen, setProvOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const say = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
+  const toastTimer = useRef(0);
+  const say = (m: string, ms = 1800) => { setToast(m); window.clearTimeout(toastTimer.current); toastTimer.current = window.setTimeout(() => setToast(null), ms); };
+  // v0.4 划词 / 截图:本次结果是否为「未入库」的临时翻译、识别中、缺权限引导、单词查词卡
+  const [ephemeral, setEphemeral] = useState(false);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [perm, setPerm] = useState<"accessibility" | "screen" | null>(null);
+  const [word, setWord] = useState<string | null>(null);
 
   const active = providers.find((p) => p.is_active);
   // 复制 = 按原文分隔拼回的整篇 markdown(列表 / 引用 / 表格结构不散)
@@ -163,8 +186,12 @@ function QuickApp() {
     }
   };
 
-  const fire = async (text = input, once: string | null = null) => {
+  const fire = async (text = input, once: string | null = null, temp = false) => {
     if (!text.trim()) return;
+    setEphemeral(temp);
+    setWord(null);
+    setPerm(null);
+    setOcrBusy(false);
     autoGrowRef.current = true; // 新翻译恢复自动长高
     setSrcOpen(false);
     if (sessionRef.current) { try { await api.cancelTranslate(sessionRef.current); } catch {} }
@@ -179,7 +206,7 @@ function QuickApp() {
     setOnceDir(once);
     const effDir = once ?? (direction === "auto" ? autoDirection(text, prefs?.native_lang, prefs?.second_lang).dir : direction);
     try {
-      sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste", format: fmt as "auto" | "md" | "plain" }, onEvent);
+      sessionRef.current = await api.translate({ text, direction: effDir, kind: "paste", format: fmt as "auto" | "md" | "plain", ephemeral: temp }, onEvent);
     } catch (e) {
       setPhase("idle");
       setLive(IDLE);
@@ -199,6 +226,91 @@ function QuickApp() {
   };
   shownRef.current = pasteOrType;
 
+  // 粘贴图片:OCR → 立即翻译(与粘贴文本一样自动入库)
+  const ocrPaste = async (file: File) => {
+    setErr(null); setPerm(null); setWord(null); setBlocks([]); setOcrBusy(true);
+    try {
+      const out = await api.ocrImage(new Uint8Array(await file.arrayBuffer()), file.type);
+      setOcrBusy(false);
+      if (!out.text.trim()) { say("未在图片中识别到文字", 3200); return; }
+      if (out.note) say(out.note, 4000);
+      setInput(out.text);
+      fire(out.text);
+    } catch (e) {
+      setOcrBusy(false);
+      setErr(`文字识别失败:${String(e)}`);
+    }
+  };
+
+  // ---------- 热键流程(Rust flow.rs 发来;监听只挂一次,经 ref 取最新闭包) ----------
+  const flowRef = useRef<{
+    capture: (text: string, origin: string) => void;
+    busy: () => void;
+    notice: (message: string, error: boolean) => void;
+    permission: (kind: string) => void;
+    replace: (text: string, front: number) => void;
+  } | null>(null);
+  const arrive = () => {
+    shownAtRef.current = Date.now(); // 刚唤出:300ms 内不触发失焦隐藏
+    autoGrowRef.current = true;
+  };
+  flowRef.current = {
+    capture: (text, origin) => {
+      arrive();
+      setInput(text);
+      setSrcOpen(true);
+      if (origin === "selection" && isSingleWord(text)) {
+        // 单词 → 词典卡;不发模型请求
+        if (sessionRef.current && phase === "streaming") cancel();
+        setOcrBusy(false); setPerm(null); setErr(null); setBlocks([]); setArticleId(null); setLive(IDLE); setUsage(EMPTY_USAGE); setLastSrc("");
+        setWord(text.trim());
+        return;
+      }
+      fire(text, null, true); // 按快捷键本身就是明确的翻译请求:不看「粘贴即译」;不自动入库
+    },
+    busy: () => { arrive(); setErr(null); setPerm(null); setWord(null); setBlocks([]); setInput(""); setLive(IDLE); setOcrBusy(true); },
+    notice: (message, error) => {
+      arrive();
+      setOcrBusy(false);
+      if (error) setErr(message); else say(message, 3200);
+    },
+    permission: (kind) => { arrive(); setOcrBusy(false); setErr(null); setWord(null); setBlocks([]); setPerm(kind === "screen" ? "screen" : "accessibility"); },
+    replace: async (text, front) => {
+      // 翻译并替换:窗口不出现。方向恒按自动规则(母语 → 第二语言,其余 → 母语)
+      if (phase === "streaming") await cancel();
+      const dir = autoDirection(text, prefs?.native_lang, prefs?.second_lang).dir;
+      try {
+        await api.replaceTranslate(text, dir, front);
+      } catch (e) {
+        arrive();
+        await safe(async () => { await w?.show(); await w?.setFocus(); });
+        setErr(`翻译并替换失败:${String(e)}`);
+      }
+    },
+  };
+  useEffect(() => {
+    const uns = [
+      listen<{ text: string; origin: string }>("quick-capture", (e) => flowRef.current?.capture(e.payload.text, e.payload.origin)),
+      listen("quick-capture-busy", () => flowRef.current?.busy()),
+      listen<{ message: string; error: boolean }>("quick-notice", (e) => flowRef.current?.notice(e.payload.message, e.payload.error)),
+      listen<{ kind: string }>("quick-permission", (e) => flowRef.current?.permission(e.payload.kind)),
+      listen<{ text: string; front: number }>("replace-request", (e) => flowRef.current?.replace(e.payload.text, e.payload.front)),
+    ];
+    return () => { uns.forEach((u) => u.then((f) => f()).catch(() => {})); };
+  }, []);
+
+  // 权限引导显示期间:窗口重新获焦(从系统设置回来)就复查,已授权则收起引导
+  useEffect(() => {
+    if (!perm || !w) return;
+    const un = w.onFocusChanged(({ payload: focused }) => {
+      if (!focused) return;
+      api.permissionStatus().then((st) => {
+        if (st[perm]) { setPerm(null); say(perm === "screen" ? "已授权:重新打开译读后生效" : "已授权,再按一次快捷键即可", 3200); }
+      }).catch(() => {});
+    });
+    return () => { un.then((f) => f()); };
+  }, [perm]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const showMain = () => safe(async () => {
     const m = await WebviewWindow.getByLabel("main");
     await m?.show();
@@ -206,6 +318,8 @@ function QuickApp() {
   });
   const openInMain = async () => {
     if (!articleId) return;
+    // 热键触发的临时翻译:此刻才「存入文章库」
+    if (ephemeral) { try { await api.articleKeep(articleId); setEphemeral(false); say("已存入文章库"); } catch (e) { setErr(String(e)); return; } }
     await showMain();
     await safe(() => emit("open-article", { id: articleId }));
   };
@@ -261,7 +375,7 @@ function QuickApp() {
     return () => { ready.then((f) => f()).catch(() => {}); focus?.then((f) => f()).catch(() => {}); };
   }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const clear = () => { setSrcOpen(true); setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); setLive(IDLE); setLastSrc(""); };
+  const clear = () => { setSrcOpen(true); setInput(""); setBlocks([]); setPhase("idle"); setErr(null); setUsage(EMPTY_USAGE); setArticleId(null); setLive(IDLE); setLastSrc(""); setWord(null); setPerm(null); setOcrBusy(false); };
   const streaming = phase === "streaming";
 
   // 下拉点外部关闭
@@ -323,7 +437,7 @@ function QuickApp() {
       const maxH = area ? (area.size.height / sf) * 0.85 : 900;
       const chrome = window.innerHeight - doc.clientHeight;
       const padY = 28;
-      const hasContent = blocks.length > 0 || !!err;
+      const hasContent = blocks.length > 0 || !!err || !!word || !!perm;
       const want = chrome + (hasContent ? content.scrollHeight + padY : 96);
       const target = Math.round(Math.min(maxH, Math.max(hasContent ? 260 : 0, want)));
       const from = window.innerHeight;
@@ -365,7 +479,7 @@ function QuickApp() {
     ro.observe(c);
     return () => ro.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { scheduleFit(); }, [blocks.length, err, srcOpen, view]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { scheduleFit(); }, [blocks.length, err, srcOpen, view, word, perm]); // eslint-disable-line react-hooks/exhaustive-deps
   // 非本程序引起的尺寸变化 = 用户手拖
   useEffect(() => {
     if (!w) return;
@@ -525,14 +639,17 @@ function QuickApp() {
           ref={inputRef}
           className="w-full h-[64px] border-none outline-none resize-none bg-transparent text-[13px] leading-[1.5] text-t1 placeholder:text-t3"
           value={input}
-          placeholder={providers.length ? "粘贴或输入要翻译的文本" : "先配置一个翻译模型 →「管理模型…」"}
+          placeholder={providers.length ? "粘贴或输入要翻译的文本,也可以粘贴截图" : "先配置一个翻译模型 →「管理模型…」"}
           title="⌘↩ 翻译 · Esc 取消"
           onChange={(e) => setInput(e.target.value)}
           onPaste={(e) => {
             const t = e.clipboardData.getData("text");
+            // 图片:必须在事件内同步取出 File(事件返回后 clipboardData 不可靠)。文本与图片并存(从表格 / 文档复制)时取文本
+            const img = Array.from(e.clipboardData.items).find((i) => i.kind === "file" && i.type.startsWith("image/"))?.getAsFile();
             e.preventDefault();
             if (t) pasteOrType(t);
-            else say("剪贴板里没有文本");
+            else if (img) ocrPaste(img);
+            else say("剪贴板里没有文本或图片");
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); fire(); }
@@ -571,9 +688,28 @@ function QuickApp() {
       <div ref={docRef} className="doc flex-1 min-h-0 mx-2.5 mt-2.5 rounded-[10px] bg-doc shadow-[0_0_0_0.5px_var(--border)] overflow-y-auto px-4 py-3.5">
        <div ref={contentRef} className="flex flex-col gap-[var(--pair-gap)]">
         {err && <p className="text-danger text-[12px] bg-surface2 rounded-md px-2.5 py-2 m-0">{err}</p>}
-        {!blocks.length && !err && (
+        {perm && (
+          <div className="flex flex-col gap-2 text-[12px] leading-[1.6]">
+            <b className="text-[13px] font-semibold text-t1">{PERM_TEXT[perm].title}</b>
+            <p className="m-0 text-t2">{PERM_TEXT[perm].body}</p>
+            <p className="m-0 text-t3">{PERM_TEXT[perm].after}</p>
+            <div className="flex gap-2 mt-1">
+              <button className="btn primary" onClick={() => api.permissionRequest(perm).catch((e) => setErr(String(e)))}>打开系统设置</button>
+              <button className="btn" onClick={() => setPerm(null)}>以后再说</button>
+            </div>
+          </div>
+        )}
+        {word && (
+          <>
+            <VocabCard inline word={word} onClose={() => setWord(null)} onAdded={() => say("已加入生词本")} />
+            <button className="self-start border-none bg-transparent text-[11px] text-t3 hover:text-t1 px-1" onClick={() => fire(word, null, true)}>改用模型翻译这个词</button>
+          </>
+        )}
+        {!blocks.length && !err && !perm && !word && (
           <p className="text-t3 text-[12px] m-0">
-            {streaming ? <>连接中 <span className="caret" /></> : `译文将逐块流式显示,并自动存入文章库 · ${autoInfo ? dirLabel(makeDir(autoInfo.src, autoInfo.to)) : autoDir ? "自动识别语言" : dirLabel(direction)}`}
+            {ocrBusy ? <>正在识别图片文字 <span className="caret" /></>
+              : streaming ? <>连接中 <span className="caret" /></>
+              : `译文将逐块流式显示,并自动存入文章库 · ${autoInfo ? dirLabel(makeDir(autoInfo.src, autoInfo.to)) : autoDir ? "自动识别语言" : dirLabel(direction)}`}
           </p>
         )}
         {units.map((u) =>
@@ -604,7 +740,7 @@ function QuickApp() {
         </span>
         <span className="flex-1" />
         <TbButton icon="copy" title="复制译文" disabled={!outText} onClick={() => { navigator.clipboard?.writeText(outText).then(() => say("已复制")); }} size={14} />
-        <TbButton icon="library" title="在主窗打开(已自动存入文章库)" disabled={!articleId || streaming} onClick={openInMain} size={14} />
+        <TbButton icon="library" title={ephemeral ? "存入文章库并在主窗打开(划词 / 截图翻译默认不入库)" : "在主窗打开(已自动存入文章库)"} disabled={!articleId || streaming} onClick={openInMain} size={14} />
         {streaming && <button className="btn" title="Esc" onClick={cancel}>取消</button>}
         {infoOpen && live.metrics && (
           <div className="menu absolute z-40 bottom-full mb-1 left-2 w-[280px] !p-3" onClick={(e) => e.stopPropagation()}>

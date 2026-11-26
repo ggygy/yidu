@@ -82,7 +82,33 @@ gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/re
   - 配齐后自动 Developer ID 签名+公证,CI 内置 `codesign/spctl/stapler` 校验;若想临时回退未签名构建,删除 `APPLE_CERTIFICATE` secret 即可。
 - 注意:私有仓的 Release 资产匿名下载 404,updater 检查会失败——对外分发时转公开仓,或自托管 latest.json(改 `plugins.updater.endpoints` 即可);仅自用无妨(手动下载 dmg 安装)。
 
+## v0.4:划词 / 截图 / 替换(开发中,分支 `feat/capture`)
+
+| 能力 | 入口 | 说明 |
+|---|---|---|
+| 划词翻译 | ⌥D(可改 / 可停用) | 辅助功能 API 取 `AXSelectedText`;取不到(Electron 等)→ 模拟 ⌘C 并原样还原剪贴板。单个英文词 → 词典卡,其余 → 模型 |
+| 截图翻译 | ⌥S、托盘菜单 | macOS `screencapture -i` 写临时文件;Windows 截图工具 + 监视剪贴板。识别后立即翻译 |
+| 粘贴图片 | 快捷窗 ⌘V | 剪贴板里只有图片时走 OCR(文本与图片并存取文本) |
+| 翻译并替换 | ⌥R | 不出窗口:译完确认前台仍是原应用 → 粘贴覆盖选区;方向恒按自动规则。托盘标题「译…」是唯一进度提示 |
+| OCR 引擎 | 设置 → 快捷窗 | 本机(macOS Vision / Windows.Media.Ocr,离线)或多模态模型(转写成 markdown 再翻译,失败回落本机) |
+
+- **不自动入库**:三个热键触发的翻译建的是 `articles.ephemeral=1` 的临时文章(管线依赖块表),不进文章库列表;快捷窗「存入文章库」转正,否则 24h 后启动时清理。粘贴(文本 / 图片)仍自动入库。
+- **权限(仅 macOS)**:划词 / 替换要「辅助功能」,截图要「屏幕录制」。首次使用时快捷窗内引导,设置页显示状态。dev 下授权对象是 `target/debug/yidu`(或启动它的终端),与正式包分开授权。
+- **Vision 绑定**:crates.io 不可达时拿不到 `objc2-vision`,改为 `objc2` 的 `msg_send!` 直调(调研 12 的备选路径),见 `ocr.rs`。真引擎冒烟:`YIDU_OCR_SAMPLE=<图片> cargo test -- --ignored ocr_sample --nocapture`。
+- **Windows**:本机无法编译验证,见 [`docs/windows-test-checklist.md`](../docs/windows-test-checklist.md)。
+- 新模块:`flow.rs`(热键流程编排)/ `selection.rs` / `capture.rs` / `ocr.rs` / `permissions.rs`;前端 `vocabcard.tsx`(主窗与快捷窗共用查词卡)。
+
+## v0.6:生词复习(开发中,与 v0.4 同在工作区,尚未分支 / 提交)
+
+- 入口:生词本面板「复习(N 个待复习)」、托盘菜单「复习生词」。全屏卡片:空格揭示,1 忘了 / 2 模糊 / 3 记得,Esc 结束;例句在揭示前把目标词挖空。
+- 调度 `srs.rs`(纯函数,SM-2 变体):记得 = 1 天 → 3 天 → ×ease;模糊 = ×1.2 且 ease −0.15;忘了 = 10 分钟后重学、ease −0.20(下限 1.3);间隔上限 365 天。
+- 新词第二天到期;每 24 小时(滚动窗口,不依赖时区)最多引入 20 个新词。migration v11:`review_state.introduced_at` + 为既有生词补建状态(立即到期,仍受上限约束)。
+- 不发通知;托盘菜单的待复习数在评分 / 删词后及每 10 分钟刷新。
+
 ## 快捷键
+
+全局:⌥T 快捷窗 · ⌥D 划词翻译 · ⌥S 截图翻译 · ⌥R 翻译并替换(均可在 设置 → 快捷窗 改键;后三个可停用)。
+
 
 主窗:⌘N 新建 · ⌘K 文章库 · ⌘R 续译 · ⌘L 亮暗 · ⌘, 设置 · **1/2/3/4 切视图(对照/分栏/纯译文/纯净)** · Esc 取消翻译/关层;快捷窗:⌥T 唤出(可改)· ⌘D 对照 · ⌘↩ 翻译 · Esc 取消。
 

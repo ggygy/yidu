@@ -8,6 +8,8 @@ import { Icon } from "./icons";
 import * as api from "./api";
 import { dirLabel, langZh, splitDir, autoDirection } from "./languages";
 import { DirPicker } from "./dirselect";
+import { VocabCard } from "./vocabcard";
+import { ReviewSession } from "./review";
 import { IS_MAC, initNative } from "./native";
 import { applyReading, stepScale } from "./reader";
 import { ConfirmCard, Segmented, TbButton, fmtTokens } from "./ui";
@@ -35,93 +37,6 @@ function fmtDate(ts: number): string {
   return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const SOURCE_LABEL: Record<string, string> = {
-  youdao: "有道词典(免费)",
-  dictapi: "dictionaryapi.dev(免费)",
-  model: "模型兜底",
-  miss: "未收录",
-};
-
-// 点词卡:有道 → dictapi → 模型兜底;命中本地缓存即时返回
-function VocabCard({ word, x, y, sentence, articleId, onClose, onAdded }: {
-  word: string; x: number; y: number; sentence?: string; articleId?: number; onClose: () => void; onAdded: (n: number) => void;
-}) {
-  const [card, setCard] = useState<DictCard | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    setCard(null);
-    setErr(null);
-    api.lookupWord(word).then(setCard).catch((e) => setErr(String(e)));
-  }, [word]);
-
-  const speak = () => {
-    const url = card?.audio || `https://dict.youdao.com/dictvoice?type=0&audio=${encodeURIComponent(word)}`;
-    new Audio(url).play().catch(() => {});
-  };
-
-  const add = async () => {
-    const def = card?.senses.map((s) => `${s.pos ? s.pos + ". " : ""}${s.gloss}`).join("; ") || card?.web_trans.join(";") || "(无释义)";
-    try {
-      await api.vocabAdd({
-        word,
-        phonetic: card?.phonetic_us || "",
-        definition: def.slice(0, 500),
-        source: card?.source === "miss" ? "manual" : card?.source || "manual",
-        sentence,
-        article_id: articleId ?? null,
-      });
-      onAdded(1);
-      onClose();
-    } catch (e) { setErr(String(e)); }
-  };
-
-  const left = Math.min(x, window.innerWidth - 320);
-  const top = Math.min(y + 14, window.innerHeight - 300);
-  return (
-    <div className="selectable fixed w-[300px] bg-surface rounded-xl shadow-[var(--shadow-card)] p-3.5 z-[60]" style={{ left: Math.max(8, left), top: Math.max(8, top) }} onClick={(e) => e.stopPropagation()}>
-      <div className="flex items-center gap-2">
-        <b className="text-[15px] font-semibold">{word}</b>
-        <span className="text-[11px] text-t3">{card?.phonetic_us ? `/${card.phonetic_us}/` : card?.phonetic_uk ? `/${card.phonetic_uk}/` : ""}</span>
-        <button title="发音" onClick={speak} className="tbtn ml-auto"><Icon n="volume" size={14} /></button>
-      </div>
-      {!card && !err && <p className="text-[12px] text-t3 mt-2 mb-0">查询中…</p>}
-      {err && <p className="text-[12px] text-t3 mt-2 mb-0">{err}</p>}
-      {card && (
-        <>
-          <p className="text-[11px] text-t3 mt-2 mb-0">释义 · {SOURCE_LABEL[card.source] ?? card.source}{card.source === "miss" ? " · 可手动加入生词本" : ""}</p>
-          {card.senses.length > 0 && (
-            <p className="text-[13px] leading-[1.6] text-t2 mt-0.5 mb-0">
-              {card.senses.slice(0, 5).map((s, i) => <span key={i}>{s.pos && <b className="text-t3 font-medium">{s.pos}. </b>}{s.gloss}<br /></span>)}
-            </p>
-          )}
-          {card.web_trans.length > 0 && <p className="text-[13px] leading-[1.6] text-t2 mt-0.5 mb-0">网络释义:{card.web_trans.slice(0, 3).join(";")}</p>}
-          {card.examples.length > 0 && (
-            <>
-              <div className="h-px bg-line my-2.5" />
-              <p className="text-[11px] text-t3 m-0">词典例句</p>
-              {card.examples.slice(0, 2).map((ex, i) => (
-                <p key={i} className="text-[12px] italic text-t2 leading-[1.6] mt-1 mb-0">“{ex.en}”{ex.zh ? <span className="text-t3">{ex.zh}</span> : null}</p>
-              ))}
-            </>
-          )}
-          {sentence && (
-            <>
-              <div className="h-px bg-line my-2.5" />
-              <p className="text-[11px] text-t3 m-0">本文例句</p>
-              <p className="text-[12px] italic text-t2 leading-[1.6] mt-1 mb-0">“{sentence.slice(0, 220)}{sentence.length > 220 ? "…" : ""}”</p>
-            </>
-          )}
-        </>
-      )}
-      <div className="flex gap-2 mt-3 justify-end">
-        <button className="btn" onClick={onClose}>忽略</button>
-        <button className="btn primary" onClick={add}>加入生词本</button>
-      </div>
-    </div>
-  );
-}
-
 // ---------- 生词本 / 术语库(弹出面板) ----------
 
 function SheetPanel({ title, count, onClose, children, foot }: { title: string; count: number; onClose: () => void; children: React.ReactNode; foot: React.ReactNode }) {
@@ -141,14 +56,21 @@ function SheetPanel({ title, count, onClose, children, foot }: { title: string; 
   );
 }
 
-function VocabPanel({ onClose, onCount, say }: { onClose: () => void; onCount: (n: number) => void; say: (m: string) => void }) {
+function VocabPanel({ onClose, onCount, onReview, say }: { onClose: () => void; onCount: (n: number) => void; onReview: () => void; say: (m: string) => void }) {
+  const [due, setDue] = useState(0);
   const [items, setItems] = useState<VocabEntry[]>([]);
   const [openId, setOpenId] = useState<number | null>(null);
   const [examples, setExamples] = useState<string[]>([]);
-  const refresh = () => api.vocabList().then((v) => { setItems(v); onCount(v.length); }).catch(() => {});
+  const refresh = () => {
+    api.vocabList().then((v) => { setItems(v); onCount(v.length); }).catch(() => {});
+    api.reviewCount().then(setDue).catch(() => {});
+  };
   useEffect(() => { refresh(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <SheetPanel title="生词本" count={items.length} onClose={onClose} foot="点原文单词即可收藏">
+    <SheetPanel title="生词本" count={items.length} onClose={onClose} foot="点原文单词即可收藏 · 新词第二天开始复习">
+      <button className={"btn justify-center " + (due > 0 ? "primary" : "")} disabled={items.length === 0} onClick={onReview}>
+        {due > 0 ? `复习(${due} 个待复习)` : "复习 · 暂无到期"}
+      </button>
       <div className="flex-1 overflow-y-auto flex flex-col gap-0.5">
         {items.map((v) => (
           <div
@@ -232,6 +154,7 @@ function App() {
   const [draft, setDraft] = useState("");
   const [draftFmt, setDraftFmt] = useState<"auto" | "md" | "plain">("auto"); // 原文格式(§2.2.5)
   const [panel, setPanel] = useState<Panel>(null);
+  const [reviewing, setReviewing] = useState(false);
   const [sideOpen, setSideOpen] = useLocalFlag("yidu-side", false); // 文章库侧栏:默认收起(☰ / ⌘K)
   const [inspOpen, setInspOpen] = useLocalFlag("yidu-insp", false); // 检查器:默认收起(ⓘ / ⌘I)
   const [query, setQuery] = useState("");
@@ -281,7 +204,7 @@ function App() {
     api.vocabList().then((v) => setVocabCount(v.length)).catch(() => {});
     checkUpdateFn().then((u) => { if (u) say(`发现新版本 v${u.version} · 菜单「译读 › 检查更新…」`); }).catch(() => {});
     api.glossaryList().then(setGlossary).catch(() => {});
-    api.hotkeyStatus().then((h) => { if (h.error) say("快捷窗热键注册失败(可能被占用)· 在设置里改键"); }).catch(() => {});
+    api.hotkeyStatus().then((h) => { if (Object.values(h).some((s) => s?.error)) say("有全局热键注册失败(可能被占用)· 在设置里改键"); }).catch(() => {});
     const subs = [
       listen<Prefs>("prefs-changed", (e) => { setPrefsState(e.payload); setDirection(e.payload.direction); }),
       listen<Provider[]>("providers-changed", (e) => setProviders(e.payload)),
@@ -345,6 +268,7 @@ function App() {
   useEffect(() => {
     const subs = [
       listen("library-changed", () => refreshLib()),
+      listen("open-review", () => { setPanel(null); setReviewing(true); }), // 托盘菜单「复习生词」
       listen<{ id: number }>("open-article", (e) => { openArticle(e.payload.id); }),
     ];
     return () => { subs.forEach((u) => u.then((f) => f())); };
@@ -778,7 +702,8 @@ function App() {
         </div>
       )}
 
-      {panel === "vocab" && <VocabPanel onClose={() => setPanel(null)} onCount={setVocabCount} say={say} />}
+      {panel === "vocab" && <VocabPanel onClose={() => setPanel(null)} onCount={setVocabCount} onReview={() => { setPanel(null); setReviewing(true); }} say={say} />}
+      {reviewing && <ReviewSession say={say} onClose={(n) => { setReviewing(false); if (n) say(`已复习 ${n} 张`); }} />}
       {panel === "glossary" && <GlossaryPanel onClose={() => setPanel(null)} say={say} onChanged={setGlossary} />}
 
       {vocab && (

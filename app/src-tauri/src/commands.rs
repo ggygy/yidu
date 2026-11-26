@@ -41,6 +41,15 @@ pub fn delete_article(state: State<AppState>, id: i64) -> Result<(), String> {
     state.db.delete_article(id).map_err(err)
 }
 
+/// 「存入文章库」:热键触发的临时翻译转正
+#[tauri::command]
+pub fn article_keep(app: tauri::AppHandle, state: State<AppState>, id: i64) -> Result<(), String> {
+    use tauri::Emitter;
+    state.db.keep_article(id).map_err(err)?;
+    let _ = app.emit("library-changed", ());
+    Ok(())
+}
+
 // ---------- 翻译会话 ----------
 
 #[tauri::command]
@@ -52,7 +61,7 @@ pub fn translate(
 ) -> Result<u64, String> {
     let session = state.counter.fetch_add(1, Ordering::SeqCst) + 1;
     state.active.store(session, Ordering::SeqCst); // 新会话直接顶替旧会话
-    tauri::async_runtime::spawn(translate::run(app, request, on_event, session));
+    tauri::async_runtime::spawn(translate::run(app, request, translate::EventSink::channel(on_event), session));
     Ok(session)
 }
 
@@ -293,6 +302,13 @@ pub struct PrefsStored {
     pub batch_mode: Option<String>,    // speed(独立请求、可并发)| cache(连续对话、串行,前缀缓存命中高)
     pub native_lang: Option<String>,   // v0.3 §2.1:母语(自动方向:源 = 母语 → 译第二语言,否则 → 译母语)
     pub second_lang: Option<String>,   // 第二语言
+    // v0.4:划词 / 截图 / 替换热键(空串 = 停用)与 OCR 引擎
+    pub hotkey_selection: Option<String>,
+    pub hotkey_screenshot: Option<String>,
+    pub hotkey_replace: Option<String>,
+    pub ocr_engine: Option<String>,    // system(本机识别)| model(多模态模型转写)
+    pub ocr_provider_id: Option<i64>,  // model 引擎用哪个 provider;None / 已删 = 当前激活的
+    pub ocr_model: Option<String>,     // model 引擎的模型名;空 = 该 provider 自己的模型
 }
 
 #[derive(Serialize, Clone)]
@@ -314,6 +330,22 @@ pub struct PrefsEffective {
     pub batch_mode: String,
     pub native_lang: String,
     pub second_lang: String,
+    pub hotkey_selection: String,
+    pub hotkey_screenshot: String,
+    pub hotkey_replace: String,
+    pub ocr_engine: String,
+    pub ocr_provider_id: Option<i64>,
+    pub ocr_model: String,
+}
+
+/// 四个全局热键动作 → 当前组合键(顺序同 `crate::HOTKEY_ACTIONS`)
+pub fn hotkeys_of(p: &PrefsEffective) -> [(&'static str, String); 4] {
+    [
+        ("quick", p.hotkey.clone()),
+        ("selection", p.hotkey_selection.clone()),
+        ("screenshot", p.hotkey_screenshot.clone()),
+        ("replace", p.hotkey_replace.clone()),
+    ]
 }
 
 pub fn load_prefs(db: &crate::db::Db) -> Result<PrefsStored, String> {
@@ -372,6 +404,12 @@ pub fn effective_prefs(p: &PrefsStored) -> PrefsEffective {
             let s = lang_or(&p.second_lang, if native == "en" { "zh" } else { "en" });
             if s == native { if native == "en" { "zh".into() } else { "en".into() } } else { s }
         },
+        hotkey_selection: p.hotkey_selection.clone().unwrap_or_else(|| "Alt+D".into()).trim().to_string(),
+        hotkey_screenshot: p.hotkey_screenshot.clone().unwrap_or_else(|| "Alt+S".into()).trim().to_string(),
+        hotkey_replace: p.hotkey_replace.clone().unwrap_or_else(|| "Alt+R".into()).trim().to_string(),
+        ocr_engine: if p.ocr_engine.as_deref() == Some("model") { "model".into() } else { "system".into() },
+        ocr_provider_id: p.ocr_provider_id,
+        ocr_model: p.ocr_model.as_deref().map(str::trim).unwrap_or("").to_string(),
     }
 }
 
@@ -445,11 +483,32 @@ pub fn apply_prefs_update(app: &tauri::AppHandle, state: &AppState, update: Pref
     if update.cached_price_per_mtok.is_some() {
         stored.cached_price_per_mtok = update.cached_price_per_mtok;
     }
-    // 热键变更:Rust 侧重注册
-    let new_hotkey = effective_prefs(&stored).hotkey;
-    let old_hotkey = effective_prefs(&old).hotkey;
-    if new_hotkey != old_hotkey {
-        crate::reregister_hotkey(app, &old_hotkey, &new_hotkey).map_err(err)?;
+    if let Some(v) = &update.hotkey_selection {
+        stored.hotkey_selection = Some(v.clone());
+    }
+    if let Some(v) = &update.hotkey_screenshot {
+        stored.hotkey_screenshot = Some(v.clone());
+    }
+    if let Some(v) = &update.hotkey_replace {
+        stored.hotkey_replace = Some(v.clone());
+    }
+    if let Some(v) = &update.ocr_engine {
+        stored.ocr_engine = Some(v.clone());
+    }
+    if update.ocr_provider_id.is_some() {
+        // 约定:≤ 0 = 清除(跟随当前激活的 provider)
+        stored.ocr_provider_id = update.ocr_provider_id.filter(|id| *id > 0);
+    }
+    if let Some(v) = &update.ocr_model {
+        stored.ocr_model = Some(v.clone());
+    }
+    // 热键变更:Rust 侧重注册(任一失败即整体不落库,偏好保持旧值)
+    let new_keys = hotkeys_of(&effective_prefs(&stored));
+    let old_keys = hotkeys_of(&effective_prefs(&old));
+    for ((action, new_key), (_, old_key)) in new_keys.iter().zip(old_keys.iter()) {
+        if new_key != old_key {
+            crate::reregister_hotkey(app, action, old_key, new_key).map_err(err)?;
+        }
     }
     state
         .db
@@ -489,6 +548,11 @@ pub fn vocab_add(
         .map_err(err)
 }
 
+/// 生词本删除后托盘的待复习数可能变了
+fn after_vocab_change(app: &tauri::AppHandle) {
+    crate::refresh_tray(app);
+}
+
 #[tauri::command]
 pub fn vocab_list(state: State<AppState>) -> Result<Vec<crate::db::VocabEntryRow>, String> {
     state.db.vocab_list().map_err(err)
@@ -500,8 +564,10 @@ pub fn vocab_examples(state: State<AppState>, id: i64) -> Result<Vec<String>, St
 }
 
 #[tauri::command]
-pub fn vocab_delete(state: State<AppState>, id: i64) -> Result<(), String> {
-    state.db.delete_vocab(id).map_err(err)
+pub fn vocab_delete(app: tauri::AppHandle, state: State<AppState>, id: i64) -> Result<(), String> {
+    state.db.delete_vocab(id).map_err(err)?;
+    after_vocab_change(&app);
+    Ok(())
 }
 
 // ---------- 术语库 ----------
@@ -612,7 +678,7 @@ pub async fn usage_report(state: State<'_, AppState>, month_start: i64) -> Resul
 
 /// 当前热键注册状态(注册失败时设置页标红;状态变化另有 `hotkey-status` 事件)
 #[tauri::command]
-pub fn hotkey_status(state: State<crate::HotkeyState>) -> crate::HotkeyStatus {
+pub fn hotkey_status(state: State<crate::HotkeyState>) -> crate::HotkeyMap {
     state.0.lock().unwrap().clone()
 }
 
@@ -657,4 +723,96 @@ pub async fn quick_minimize(app: tauri::AppHandle) -> Result<(), String> {
 pub async fn quick_expand(app: tauri::AppHandle) -> Result<(), String> {
     let a = app.clone();
     app.run_on_main_thread(move || crate::native::expand_quick(&a)).map_err(err)
+}
+
+// ---------- v0.4:OCR / 系统权限 / 划词替换 ----------
+
+/// 图片 → 文字。前端以 Uint8Array 作 invoke 第二参(raw body,无 base64 膨胀);
+/// 引擎按偏好(本机 / 多模态模型,模型失败回落本机)。识别不到文字 → text 为空串
+#[tauri::command]
+pub async fn ocr_image(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<crate::flow::OcrOutput, String> {
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(b) => b.clone(),
+        _ => return Err("ocr_image 需要图片原始字节(Uint8Array)".into()),
+    };
+    let mime = request
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    crate::flow::recognize(&app, bytes, mime).await.map_err(err)
+}
+
+#[tauri::command]
+pub fn permission_status() -> crate::permissions::PermissionStatus {
+    crate::permissions::status()
+}
+
+/// 触发系统授权框并打开对应的系统设置面板(kind:accessibility | screen)
+#[tauri::command]
+pub async fn permission_request(kind: String) -> Result<crate::permissions::PermissionStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::permissions::request(&kind);
+        crate::permissions::status()
+    })
+    .await
+    .map_err(err)
+}
+
+/// 划词替换(⌥R)后半段:快捷窗 webview 判定方向后回调。译完确认前台仍是原应用 → 粘贴覆盖选区;
+/// 已切走 → 译文留在剪贴板并报错(不往别的应用里乱贴)
+#[tauri::command]
+pub async fn replace_translate(app: tauri::AppHandle, state: State<'_, AppState>, text: String, direction: String, front: i64) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let session = state.counter.fetch_add(1, Ordering::SeqCst) + 1;
+    state.active.store(session, Ordering::SeqCst);
+    crate::tray_busy(&app, true);
+    let translated = translate::translate_to_text(&app, text, direction, session).await;
+    crate::tray_busy(&app, false);
+    let translated = translated.map_err(err)?;
+    if translated.trim().is_empty() {
+        return Err("译文为空".into());
+    }
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::selection::frontmost() != front {
+            let _ = app2.clipboard().write_text(translated);
+            return Err("前台应用已切换,没有替换;译文已复制到剪贴板".to_string());
+        }
+        crate::selection::paste_over_selection(&app2, &translated).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+// ---------- v0.6:生词复习(SM-2 变体,srs.rs) ----------
+
+/// 此刻可复习的张数(生词本按钮 / 托盘菜单)
+#[tauri::command]
+pub fn review_count(state: State<AppState>) -> Result<i64, String> {
+    state.db.review_count(crate::db::now()).map_err(err)
+}
+
+/// 复习队列(到期旧词在前,新词受每 24h 上限约束)
+#[tauri::command]
+pub fn review_due(state: State<AppState>, limit: Option<i64>) -> Result<Vec<crate::db::ReviewCard>, String> {
+    state.db.review_due(crate::db::now(), limit.unwrap_or(200).clamp(1, 500)).map_err(err)
+}
+
+#[derive(Serialize)]
+pub struct ReviewResult {
+    pub due_at: i64,
+    pub interval_days: f64,
+    /// 评分后还剩多少张可复习
+    pub remaining: i64,
+}
+
+#[tauri::command]
+pub fn review_grade(app: tauri::AppHandle, state: State<AppState>, entry_id: i64, grade: crate::srs::Grade) -> Result<ReviewResult, String> {
+    let now = crate::db::now();
+    let next = state.db.review_grade(entry_id, grade, now).map_err(err)?;
+    let remaining = state.db.review_count(now).map_err(err)?;
+    crate::refresh_tray(&app);
+    Ok(ReviewResult { due_at: next.due_at, interval_days: next.interval_days, remaining })
 }

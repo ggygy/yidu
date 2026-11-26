@@ -177,6 +177,22 @@ pub fn open_path(path: &std::path::Path) -> Result<Db> {
         conn.execute_batch("ALTER TABLE usage_log ADD COLUMN hedged INTEGER NOT NULL DEFAULT 0;")?;
         conn.pragma_update(None, "user_version", 9)?;
     }
+    if version < 10 {
+        // v10(v0.4 划词/截图翻译):热键触发的翻译不自动入库 —— 仍建文章行(管线依赖块表),
+        // 标 ephemeral 不进文章库列表;用户点「存入文章库」清标记,否则 24h 后清理
+        conn.execute_batch("ALTER TABLE articles ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0;")?;
+        conn.pragma_update(None, "user_version", 10)?;
+    }
+    if version < 11 {
+        // v11(v0.6 生词复习):introduced_at = 首次评分时间(NULL = 还没复习过的新词,受每日新词上限约束);
+        // 既有生词补建复习状态,立即到期(仍按每日上限分批出现)
+        conn.execute_batch(&format!(
+            "ALTER TABLE review_state ADD COLUMN introduced_at INTEGER;
+             INSERT OR IGNORE INTO review_state(entry_id, due_at) SELECT id, {} FROM vocab_entries;",
+            now()
+        ))?;
+        conn.pragma_update(None, "user_version", 11)?;
+    }
     Ok(Db { conn: Mutex::new(conn) })
 }
 
@@ -243,6 +259,19 @@ pub struct ProviderRow {
     pub has_key: bool,
 }
 
+/// 复习卡片:词 + 释义 + 至多 2 条来自文章的例句
+#[derive(Serialize, Clone, Debug)]
+pub struct ReviewCard {
+    pub entry_id: i64,
+    pub lemma: String,
+    pub phonetic: String,
+    pub definition: String,
+    /// 还没复习过(占用每日新词额度)
+    pub is_new: bool,
+    pub interval_days: f64,
+    pub examples: Vec<String>,
+}
+
 /// usage_log 一行(一次 HTTP 请求)
 #[derive(Debug, Default, Clone)]
 pub struct UsageRecord {
@@ -295,13 +324,14 @@ impl Db {
         kind: &str,
         direction: &str,
         blocks: &[crate::blocks::Block],
+        ephemeral: bool,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let t = now();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO articles(title, kind, direction, created_at, updated_at) VALUES(?1,?2,?3,?4,?4)",
-            params![title, kind, direction, t],
+            "INSERT INTO articles(title, kind, direction, created_at, updated_at, ephemeral) VALUES(?1,?2,?3,?4,?4,?5)",
+            params![title, kind, direction, t, ephemeral as i64],
         )?;
         let id = tx.last_insert_rowid();
         for (i, b) in blocks.iter().enumerate() {
@@ -324,7 +354,7 @@ impl Db {
             "SELECT a.id, a.title, a.kind, a.direction, a.pinned, a.created_at, a.updated_at,
                     COUNT(b.id), COALESCE(SUM(b.trans_status='done'),0)
              FROM articles a LEFT JOIN blocks b ON b.article_id=a.id
-             WHERE a.title LIKE ?1 ESCAPE '\\'
+             WHERE a.ephemeral=0 AND a.title LIKE ?1 ESCAPE '\\'
              GROUP BY a.id
              ORDER BY a.pinned DESC, a.updated_at DESC",
         )?;
@@ -445,6 +475,23 @@ impl Db {
         Ok(())
     }
 
+    /// 「存入文章库」:清掉 ephemeral 标记,文章进入列表
+    pub fn keep_article(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE articles SET ephemeral=0, updated_at=?2 WHERE id=?1", params![id, now()])?;
+        Ok(())
+    }
+
+    /// 清理早于 cutoff(unix 秒)的未入库临时文章,返回删除篇数
+    pub fn prune_ephemeral(&self, cutoff: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM blocks WHERE article_id IN (SELECT id FROM articles WHERE ephemeral=1 AND updated_at < ?1)",
+            params![cutoff],
+        )?;
+        Ok(conn.execute("DELETE FROM articles WHERE ephemeral=1 AND updated_at < ?1", params![cutoff])?)
+    }
+
     // ---------- 术语 ----------
 
     pub fn glossary_terms(&self) -> Result<Vec<(String, String)>> {
@@ -561,8 +608,97 @@ impl Db {
                 )?;
             }
         }
+        // 复习状态:新词第二天到期;已有状态(重复收藏同一词)不动
+        tx.execute(
+            "INSERT OR IGNORE INTO review_state(entry_id, due_at, ease) VALUES(?1,?2,?3)",
+            params![id, crate::srs::State::fresh(t).due_at, crate::srs::DEFAULT_EASE],
+        )?;
         tx.commit()?;
         Ok(id)
+    }
+
+    // ---------- 生词复习(srs.rs 调度) ----------
+
+    /// 最近 24 小时内引入(首次评分)的新词数
+    fn introduced_recently(conn: &Connection, now: i64) -> Result<i64> {
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM review_state WHERE introduced_at IS NOT NULL AND introduced_at > ?1",
+            params![now - crate::srs::DAY],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// 此刻可复习的张数:到期的旧词全部 + 到期的新词(不超过今日剩余新词额度)
+    pub fn review_count(&self, now: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let old: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM review_state WHERE introduced_at IS NOT NULL AND due_at <= ?1",
+            params![now],
+            |r| r.get(0),
+        )?;
+        let fresh: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM review_state WHERE introduced_at IS NULL AND due_at <= ?1",
+            params![now],
+            |r| r.get(0),
+        )?;
+        let quota = (crate::srs::NEW_PER_DAY - Self::introduced_recently(&conn, now)?).max(0);
+        Ok(old + fresh.min(quota))
+    }
+
+    /// 复习队列:先到期最久的旧词,再新词(按加入顺序,受额度限制)
+    pub fn review_due(&self, now: i64, limit: i64) -> Result<Vec<ReviewCard>> {
+        let conn = self.conn.lock().unwrap();
+        let quota = (crate::srs::NEW_PER_DAY - Self::introduced_recently(&conn, now)?).max(0);
+        let mut stmt = conn.prepare(
+            "SELECT * FROM (
+                SELECT v.id, v.lemma, v.phonetic, v.definition, 0 AS is_new, r.due_at, r.interval_days
+                FROM review_state r JOIN vocab_entries v ON v.id = r.entry_id
+                WHERE r.introduced_at IS NOT NULL AND r.due_at <= ?1
+                ORDER BY r.due_at LIMIT ?2)
+             UNION ALL
+             SELECT * FROM (
+                SELECT v.id, v.lemma, v.phonetic, v.definition, 1 AS is_new, r.due_at, r.interval_days
+                FROM review_state r JOIN vocab_entries v ON v.id = r.entry_id
+                WHERE r.introduced_at IS NULL AND r.due_at <= ?1
+                ORDER BY r.due_at, v.id LIMIT ?3)
+             LIMIT ?2",
+        )?;
+        let mut cards = stmt
+            .query_map(params![now, limit, quota], |r| {
+                Ok(ReviewCard {
+                    entry_id: r.get(0)?,
+                    lemma: r.get(1)?,
+                    phonetic: r.get(2)?,
+                    definition: r.get(3)?,
+                    is_new: r.get::<_, i64>(4)? != 0,
+                    interval_days: r.get(6)?,
+                    examples: Vec::new(),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut ex = conn.prepare("SELECT sentence FROM vocab_examples WHERE entry_id=?1 ORDER BY id DESC LIMIT 2")?;
+        for c in &mut cards {
+            c.examples = ex.query_map(params![c.entry_id], |r| r.get(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+        }
+        Ok(cards)
+    }
+
+    /// 评分:按 srs::schedule 推进状态并落库;返回新状态
+    pub fn review_grade(&self, entry_id: i64, grade: crate::srs::Grade, now: i64) -> Result<crate::srs::State> {
+        let conn = self.conn.lock().unwrap();
+        let cur = conn.query_row(
+            "SELECT COALESCE(due_at, 0), interval_days, ease, reps, lapses FROM review_state WHERE entry_id=?1",
+            params![entry_id],
+            |r| Ok(crate::srs::State { due_at: r.get(0)?, interval_days: r.get(1)?, ease: r.get(2)?, reps: r.get(3)?, lapses: r.get(4)? }),
+        )?;
+        let next = crate::srs::schedule(cur, grade, now);
+        conn.execute(
+            "UPDATE review_state SET due_at=?2, interval_days=?3, ease=?4, reps=?5, lapses=?6,
+                    introduced_at=COALESCE(introduced_at, ?7)
+             WHERE entry_id=?1",
+            params![entry_id, next.due_at, next.interval_days, next.ease, next.reps, next.lapses, now],
+        )?;
+        Ok(next)
     }
 
     pub fn vocab_list(&self) -> Result<Vec<VocabEntryRow>> {
@@ -847,6 +983,94 @@ mod tests {
     }
 
     #[test]
+    fn review_queue_respects_due_time_and_new_card_quota() {
+        use crate::srs::{Grade, DAY, NEW_PER_DAY};
+        let (db, dir) = temp_db("review");
+        let t0 = now();
+        for i in 0..25 {
+            db.add_vocab(&format!("word{i:02}"), "", "def", "manual", if i == 0 { Some("An example with word00.") } else { None }, None).unwrap();
+        }
+        // 刚加入:第二天才到期
+        assert_eq!(db.review_count(t0).unwrap(), 0);
+        let t1 = t0 + DAY + 60;
+        // 25 个新词到期,但每 24h 只放 20 个
+        assert_eq!(db.review_count(t1).unwrap(), NEW_PER_DAY);
+        let cards = db.review_due(t1, 100).unwrap();
+        assert_eq!(cards.len() as i64, NEW_PER_DAY);
+        assert!(cards.iter().all(|c| c.is_new));
+        assert_eq!(cards[0].lemma, "word00");
+        assert_eq!(cards[0].examples, vec!["An example with word00.".to_string()]);
+        // 评 Good:离开队列、占掉 1 个新词额度(未到期的新词不补位)
+        let s = db.review_grade(cards[0].entry_id, Grade::Good, t1).unwrap();
+        assert_eq!(s.due_at, t1 + DAY);
+        assert_eq!(db.review_count(t1).unwrap(), NEW_PER_DAY - 1);
+        // 评 Forgot:10 分钟后作为旧词回来,不再占新词额度
+        db.review_grade(cards[1].entry_id, Grade::Forgot, t1).unwrap();
+        assert_eq!(db.review_count(t1).unwrap(), NEW_PER_DAY - 2);
+        let later = db.review_due(t1 + 700, 100).unwrap();
+        assert_eq!(later[0].lemma, "word01");
+        assert!(!later[0].is_new);
+        // 24h 后额度恢复:剩下的新词 + 到期的旧词都出现
+        let t2 = t1 + DAY + 60;
+        let due = db.review_due(t2, 100).unwrap();
+        assert_eq!(due.iter().filter(|c| !c.is_new).count(), 2); // word00(1 天)+ word01(重学)
+        assert_eq!(due.iter().filter(|c| c.is_new).count() as i64, NEW_PER_DAY); // 剩 23 个新词,仍只放 20
+        assert!(!due[0].is_new); // 旧词排前
+        // limit 生效;重复收藏不重置进度;删除连带清状态
+        assert_eq!(db.review_due(t2, 5).unwrap().len(), 5);
+        db.add_vocab("word00", "", "def2", "manual", None, None).unwrap();
+        assert!(db.review_due(t2, 100).unwrap().iter().any(|c| c.lemma == "word00" && !c.is_new));
+        let n = db.review_count(t2).unwrap();
+        db.delete_vocab(due[0].entry_id).unwrap();
+        assert_eq!(db.review_count(t2).unwrap(), n - 1);
+
+        // 旧库(v10 前已有生词、无复习状态)升级:补建状态且立即可复习
+        drop(db);
+        let path = dir.join("old.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.execute_batch("INSERT INTO vocab_entries(lemma, created_at, updated_at) VALUES('legacy', 1, 1);").unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let db = open_path(&path).unwrap();
+        let cards = db.review_due(now() + 1, 10).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert!(cards[0].is_new && cards[0].lemma == "legacy");
+    }
+
+    #[test]
+    fn ephemeral_articles_hidden_until_kept_and_pruned() {
+        let (db, dir) = temp_db("ephemeral");
+        let blocks = crate::blocks::split_blocks("hello world");
+        let kept = db.create_article_with_blocks("kept", "paste", "en2zh", &blocks, false).unwrap();
+        let temp = db.create_article_with_blocks("temp", "paste", "en2zh", &blocks, true).unwrap();
+        let ids = |db: &Db| db.list_articles("").unwrap().iter().map(|a| a.id).collect::<Vec<_>>();
+        assert_eq!(ids(&db), vec![kept]);
+        // 临时文章仍可按 id 读取(快捷窗「在主窗打开」)
+        assert_eq!(db.get_article(temp).unwrap().0.title, "temp");
+        // 未过期不清;过期只清临时的
+        assert_eq!(db.prune_ephemeral(now() - 3600).unwrap(), 0);
+        db.keep_article(temp).unwrap();
+        assert_eq!(ids(&db).len(), 2);
+        let temp2 = db.create_article_with_blocks("temp2", "paste", "en2zh", &blocks, true).unwrap();
+        assert_eq!(db.prune_ephemeral(now() + 10).unwrap(), 1);
+        assert!(db.get_article(temp2).is_err());
+        assert_eq!(ids(&db).len(), 2);
+        // 旧库(v9,无 ephemeral 列)升级后既有文章仍在列表里
+        drop(db);
+        let path = dir.join("old.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.execute_batch("INSERT INTO articles(title, created_at, updated_at) VALUES('old', 1, 1);").unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let db = open_path(&path).unwrap();
+        assert_eq!(db.list_articles("").unwrap().len(), 1);
+    }
+
+    #[test]
     fn usage_model_and_report() {
         let (db, _dir) = temp_db("report");
         db.insert_usage(&UsageRecord { kind: "translate".into(), model: "m1".into(), ttft_ms: Some(700), latency_ms: 900, completion_tokens: 10, reasoning_tokens: 4, ..Default::default() }).unwrap();
@@ -885,7 +1109,7 @@ mod tests {
         {
             let conn = db.conn.lock().unwrap();
             let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 9);
+            assert_eq!(v, 11);
             let row: (Option<i64>, Option<i64>, Option<i64>, i64, i64, i64) = conn
                 .query_row(
                     "SELECT ttft_ms, first_block_ms, first_byte_ms, reasoning_tokens, batch_blocks, batch_chars FROM usage_log",
