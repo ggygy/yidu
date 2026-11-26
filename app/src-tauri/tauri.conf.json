@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "译读",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.yidu.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -54,7 +54,7 @@
       "endpoints": [
         "https://github.com/ggygy/yidu/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwNzM5QjMzMTczRDVDMUUKUldRZVhEMFhNNXR6a0hzTm5URFBBNnNZR0ZEd0Fsd1N0VmlkeVJ4YVlvbm5IUlJkZ09Wb3NjR2IK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFFMjJEQTI1MjM3M0RGRjcKUldUMzMzTWpKZG9pcnM2Uk8vTEVGaG9YQjhwS2tacDVYRThNQWtjTDZzQzNkWEdWNU9FL0VLejEK"
     }
   }
 }
