@@ -82,7 +82,7 @@ gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/re
   - 配齐后自动 Developer ID 签名+公证,CI 内置 `codesign/spctl/stapler` 校验;若想临时回退未签名构建,删除 `APPLE_CERTIFICATE` secret 即可。
 - 注意:私有仓的 Release 资产匿名下载 404,updater 检查会失败——对外分发时转公开仓,或自托管 latest.json(改 `plugins.updater.endpoints` 即可);仅自用无妨(手动下载 dmg 安装)。
 
-## v0.4:划词 / 截图 / 替换(开发中,分支 `feat/capture`)
+## v0.4:划词 / 截图 / 替换
 
 | 能力 | 入口 | 说明 |
 |---|---|---|
@@ -98,7 +98,7 @@ gh release create v0.x.y target/release/bundle/macos/译读.app.tar.gz target/re
 - **Windows**:本机无法编译验证,见 [`docs/windows-test-checklist.md`](../docs/windows-test-checklist.md)。
 - 新模块:`flow.rs`(热键流程编排)/ `selection.rs` / `capture.rs` / `ocr.rs` / `permissions.rs`;前端 `vocabcard.tsx`(主窗与快捷窗共用查词卡)。
 
-## v0.6:生词复习(开发中,与 v0.4 同在工作区,尚未分支 / 提交)
+## v0.4:生词复习
 
 - 入口:生词本面板「复习(N 个待复习)」、托盘菜单「复习生词」。全屏卡片:空格揭示,1 忘了 / 2 模糊 / 3 记得,Esc 结束;例句在揭示前把目标词挖空。
 - 调度 `srs.rs`(纯函数,SM-2 变体):记得 = 1 天 → 3 天 → ×ease;模糊 = ×1.2 且 ease −0.15;忘了 = 10 分钟后重学、ease −0.20(下限 1.3);间隔上限 365 天。
