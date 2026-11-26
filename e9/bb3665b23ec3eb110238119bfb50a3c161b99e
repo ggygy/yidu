@@ -1,0 +1,19 @@
+app/src-tauri/tauri.conf.json
+  s_a47ae66d1d7a95::t_6247a6c63d4202 4,57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.52-trip",
+  "base_commit_sha": "e9bb3665b23ec3eb110238119bfb50a3c161b99e",
+  "prompts": {},
+  "sessions": {
+    "s_a47ae66d1d7a95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a7ba25d4-0ddc-4648-b935-826093041785",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "wangjunzhou <wangjunzhou@trip.com>"
+    }
+  }
+}
