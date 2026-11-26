@@ -1,13 +1,19 @@
 // 装配:window-state(禁可见性恢复)+ 全局快捷键(Rust 侧权威)+ 剪贴板 + tray + DB + 命令
 mod batch;
 mod blocks;
+mod capture;
 mod commands;
 mod db;
 mod dict;
+mod flow;
 mod keychain;
 mod native;
+mod ocr;
+mod permissions;
 mod prompt;
 mod providers;
+mod selection;
+mod srs;
 mod sse;
 mod translate;
 mod validate;
@@ -50,13 +56,63 @@ pub fn toggle_quick(app: &tauri::AppHandle) {
     let _ = app.emit_to("quick", "quick-shown", ());
 }
 
-/// 热键注册状态(v0.3 §1:注册失败必须可见,不再只 eprintln)
+/// 划词 / 截图流程唤出快捷窗:只显示、不隐藏(与 ⌥T 的切换语义不同),也不触发剪贴板预填(不发 quick-shown)
+pub fn summon_quick(app: &tauri::AppHandle) {
+    if native::mini_visible(app) {
+        native::expand_quick(app);
+    }
+    let Some(q) = app.get_webview_window("quick") else { return };
+    if !q.is_visible().unwrap_or(false) {
+        native::place_quick(app);
+    }
+    native::update_dock(app);
+    let _ = q.unminimize();
+    let _ = q.show();
+    let _ = q.set_focus();
+}
+
+/// 截图前先把快捷窗让开(它常驻置顶,会挡住要截的内容);返回此前是否可见
+pub fn hide_quick(app: &tauri::AppHandle) -> bool {
+    let Some(q) = app.get_webview_window("quick") else { return false };
+    if !q.is_visible().unwrap_or(false) {
+        return false;
+    }
+    native::remember_quick_pos(app);
+    let _ = q.hide();
+    true
+}
+
+/// 划词替换进行中:托盘标题显示「译…」(无窗口流程的唯一进度提示);结束后恢复热键告警标记
+pub fn tray_busy(app: &tauri::AppHandle, busy: bool) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let warn = app
+        .try_state::<HotkeyState>()
+        .map(|st| st.0.lock().unwrap().values().any(|s| s.error.is_some()))
+        .unwrap_or(false);
+    let _ = tray.set_title(if busy { Some("译…") } else if warn { Some("!") } else { None });
+}
+
+/// 全局热键动作:quick 唤出快捷窗 / selection 划词翻译 / screenshot 截图翻译 / replace 划词替换
+pub const HOTKEY_ACTIONS: [&str; 4] = ["quick", "selection", "screenshot", "replace"];
+
+fn action_label(action: &str) -> &'static str {
+    match action {
+        "selection" => "划词翻译",
+        "screenshot" => "截图翻译",
+        "replace" => "翻译并替换",
+        _ => "快捷翻译",
+    }
+}
+
+/// 热键注册状态(v0.3 §1:注册失败必须可见,不再只 eprintln);按动作各一份
 #[derive(Default)]
-pub struct HotkeyState(pub Mutex<HotkeyStatus>);
+pub struct HotkeyState(pub Mutex<HotkeyMap>);
+
+pub type HotkeyMap = std::collections::BTreeMap<String, HotkeyStatus>;
 
 #[derive(serde::Serialize, Clone, Default, Debug)]
 pub struct HotkeyStatus {
-    /// 当前应生效的组合键
+    /// 当前应生效的组合键(空 = 未设置,该动作停用)
     pub accel: String,
     /// None = 已注册;Some = 注册失败原因(多半被其他应用占用)
     pub error: Option<String>,
@@ -64,23 +120,44 @@ pub struct HotkeyStatus {
 
 const TRAY_ID: &str = "yidu-tray";
 
-fn build_tray_menu(app: &tauri::AppHandle, status: &HotkeyStatus) -> tauri::Result<Menu<tauri::Wry>> {
+fn build_tray_menu(app: &tauri::AppHandle, statuses: &HotkeyMap) -> tauri::Result<Menu<tauri::Wry>> {
+    // 待复习生词数(v0.6;安静提示,不发通知)
+    let due = app
+        .try_state::<translate::AppState>()
+        .and_then(|st| st.db.review_count(db::now()).ok())
+        .unwrap_or(0);
+    let review_label = if due > 0 { format!("复习生词({due} 个待复习)") } else { "复习生词".to_string() };
+    let review = MenuItem::with_id(app, "review", review_label, true, None::<&str>)?;
     let open_main = MenuItem::with_id(app, "open-main", "打开主窗口", true, None::<&str>)?;
     let quick = MenuItem::with_id(app, "toggle-quick", "快捷翻译", true, None::<&str>)?;
+    let shot = MenuItem::with_id(app, "screenshot", "截图翻译", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出译读", true, None::<&str>)?;
-    if status.error.is_some() {
+    let failed: Vec<String> = HOTKEY_ACTIONS
+        .iter()
+        .filter_map(|a| statuses.get(*a).filter(|s| s.error.is_some()).map(|s| format!("{} {}", action_label(a), pretty_accel(&s.accel))))
+        .collect();
+    if !failed.is_empty() {
         let warn = MenuItem::with_id(
             app,
             "hotkey-fix",
-            format!("⚠ 热键 {} 注册失败,点此改键…", pretty_accel(&status.accel)),
+            format!("⚠ 热键注册失败({}),点此改键…", failed.join("、")),
             true,
             None::<&str>,
         )?;
         let sep = PredefinedMenuItem::separator(app)?;
-        let items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 5] = [&warn, &sep, &quick, &open_main, &quit];
+        let items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 7] = [&warn, &sep, &quick, &shot, &review, &open_main, &quit];
         Menu::with_items(app, &items)
     } else {
-        Menu::with_items(app, &[&open_main, &quick, &quit])
+        Menu::with_items(app, &[&open_main, &quick, &shot, &review, &quit])
+    }
+}
+
+/// 重建托盘菜单(待复习数变了:评分 / 删词 / 托盘被点开时)
+pub fn refresh_tray(app: &tauri::AppHandle) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let map = app.try_state::<HotkeyState>().map(|st| st.0.lock().unwrap().clone()).unwrap_or_default();
+    if let Ok(menu) = build_tray_menu(app, &map) {
+        let _ = tray.set_menu(Some(menu));
     }
 }
 
@@ -92,29 +169,32 @@ fn pretty_accel(a: &str) -> String {
         .replace('+', "")
 }
 
-/// 更新热键状态:托盘标题/菜单 + 广播 `hotkey-status`(两窗与设置页据此标红)
-pub fn set_hotkey_status(app: &tauri::AppHandle, accel: &str, error: Option<String>) {
-    let status = HotkeyStatus { accel: accel.to_string(), error };
-    if let Some(st) = app.try_state::<HotkeyState>() {
-        *st.0.lock().unwrap() = status.clone();
+/// 更新某动作的热键状态:托盘标题/菜单 + 广播 `hotkey-status`(全量 map;设置页据此标红)
+pub fn set_hotkey_status(app: &tauri::AppHandle, action: &str, accel: &str, error: Option<String>) {
+    if let Some(e) = &error {
+        eprintln!("[译读] {}热键 {accel} 注册失败(可能被占用):{e}", action_label(action));
     }
-    if let Some(e) = &status.error {
-        eprintln!("[译读] 热键 {accel} 注册失败(可能被占用):{e}");
-    }
+    let Some(st) = app.try_state::<HotkeyState>() else { return };
+    let map = {
+        let mut m = st.0.lock().unwrap();
+        m.insert(action.to_string(), HotkeyStatus { accel: accel.to_string(), error });
+        m.clone()
+    };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        if let Ok(menu) = build_tray_menu(app, &status) {
+        if let Ok(menu) = build_tray_menu(app, &map) {
             let _ = tray.set_menu(Some(menu));
         }
-        let warn = status.error.is_some();
+        let warn = map.values().any(|s| s.error.is_some());
         let _ = tray.set_title(if warn { Some("!") } else { None::<&str> });
+        let quick = map.get("quick").cloned().unwrap_or_default();
         let tip = if warn {
-            format!("译读 · 热键 {} 注册失败", pretty_accel(accel))
+            "译读 · 有热键注册失败".to_string()
         } else {
-            format!("译读 · {} 唤出快捷翻译", pretty_accel(accel))
+            format!("译读 · {} 唤出快捷翻译", pretty_accel(&quick.accel))
         };
         let _ = tray.set_tooltip(Some(tip));
     }
-    let _ = app.emit("hotkey-status", status);
+    let _ = app.emit("hotkey-status", map);
 }
 
 /// 打开主窗;settings = 改为打开独立设置窗口的「快捷窗」分区(热键改键入口)
@@ -131,11 +211,24 @@ pub fn show_main(app: &tauri::AppHandle, settings: bool) {
     }
 }
 
-/// 注册热键(重复注册同一键会报错,调用方先 unregister)
-pub fn register_hotkey(app: &tauri::AppHandle, accel: &str) -> Result<()> {
-    app.global_shortcut().on_shortcut(accel, |app, _shortcut, event| {
+/// 热键按下:quick 走唤出语义;其余三个是取词 / 截图流程(耗时,放后台线程)
+fn on_hotkey(app: &tauri::AppHandle, action: &'static str) {
+    if action == "quick" {
+        toggle_quick(app);
+    } else {
+        flow::spawn(app, action);
+    }
+}
+
+/// 注册某动作的热键(空 = 停用,不注册;重复注册同一键会报错,调用方先 unregister)
+pub fn register_hotkey(app: &tauri::AppHandle, action: &str, accel: &str) -> Result<()> {
+    if accel.is_empty() {
+        return Ok(());
+    }
+    let action: &'static str = HOTKEY_ACTIONS.iter().copied().find(|a| *a == action).unwrap_or("quick");
+    app.global_shortcut().on_shortcut(accel, move |app, _shortcut, event| {
         if event.state == ShortcutState::Pressed {
-            toggle_quick(app);
+            on_hotkey(app, action);
         }
     })?;
     Ok(())
@@ -143,23 +236,23 @@ pub fn register_hotkey(app: &tauri::AppHandle, accel: &str) -> Result<()> {
 
 /// 改键:注销旧键(旧键可能从未注册成功,注销失败不阻断)→ 注册新键;
 /// 新键失败则尽力恢复旧键并返回错误(调用方不落库,偏好保持旧值)。
-pub fn reregister_hotkey(app: &tauri::AppHandle, old: &str, new: &str) -> Result<()> {
+pub fn reregister_hotkey(app: &tauri::AppHandle, action: &str, old: &str, new: &str) -> Result<()> {
     let gs = app.global_shortcut();
     if old == new {
         return Ok(());
     }
-    if gs.is_registered(old) {
+    if !old.is_empty() && gs.is_registered(old) {
         let _ = gs.unregister(old);
     }
-    match register_hotkey(app, new) {
+    match register_hotkey(app, action, new) {
         Ok(()) => {
-            set_hotkey_status(app, new, None);
+            set_hotkey_status(app, action, new, None);
             Ok(())
         }
         Err(e) => {
-            let rollback = register_hotkey(app, old).err().map(|e| e.to_string());
-            set_hotkey_status(app, old, rollback);
-            Err(anyhow::anyhow!("热键 {} 注册失败(可能被其他应用占用):{e}", pretty_accel(new)))
+            let rollback = register_hotkey(app, action, old).err().map(|e| e.to_string());
+            set_hotkey_status(app, action, old, rollback);
+            Err(anyhow::anyhow!("热键 {} 注册失败(可能被其他应用或本应用其他动作占用):{e}", pretty_accel(new)))
         }
     }
 }
@@ -221,13 +314,14 @@ pub fn run() {
             // tray:唤出主窗/快捷窗、退出(热键失败时首项为「改键」入口)
             let stored = commands::load_prefs(&db)?;
             let eff = commands::effective_prefs(&stored);
-            let accel = eff.hotkey.clone();
+            // 热键触发的临时翻译:24h 未「存入文章库」即清理
+            let _ = db.prune_ephemeral(db::now() - 24 * 3600);
 
             // 外观三态(Rust 权威)+ 应用菜单(macOS:自定义菜单须自带编辑菜单)
             #[cfg(target_os = "macos")]
             native::install_menu(app.handle(), &eff.theme_mode)?;
             native::apply_theme_mode(app.handle(), &eff.theme_mode);
-            let menu = build_tray_menu(app.handle(), &HotkeyStatus { accel: accel.clone(), error: None })?;
+            let menu = build_tray_menu(app.handle(), &HotkeyMap::new())?;
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().expect("缺少应用图标").clone())
                 .menu(&menu)
@@ -235,14 +329,32 @@ pub fn run() {
                     "open-main" => show_main(app, false),
                     "hotkey-fix" => show_main(app, true),
                     "toggle-quick" => toggle_quick(app),
+                    "screenshot" => flow::spawn(app, "screenshot"),
+                    "review" => {
+                        show_main(app, false);
+                        let _ = app.emit_to("main", "open-review", ());
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
 
-            // 全局热键(默认 ⌥T,可配置,存 app_state);失败 → 托盘「!」+ 菜单改键入口 + hotkey-status 事件
-            let err = register_hotkey(app.handle(), &accel).err().map(|e| e.to_string());
-            set_hotkey_status(app.handle(), &accel, err);
+            // 待复习数随时间增长(词到期):托盘菜单每 10 分钟重建一次
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                        refresh_tray(&handle);
+                    }
+                });
+            }
+
+            // 全局热键(可配置,存 app_state);失败 → 托盘「!」+ 菜单改键入口 + hotkey-status 事件
+            for (action, accel) in commands::hotkeys_of(&eff) {
+                let err = register_hotkey(app.handle(), action, &accel).err().map(|e| e.to_string());
+                set_hotkey_status(app.handle(), action, &accel, err);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -281,6 +393,14 @@ pub fn run() {
             commands::open_settings,
             commands::quick_minimize,
             commands::quick_expand,
+            commands::article_keep,
+            commands::ocr_image,
+            commands::permission_status,
+            commands::permission_request,
+            commands::replace_translate,
+            commands::review_count,
+            commands::review_due,
+            commands::review_grade,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

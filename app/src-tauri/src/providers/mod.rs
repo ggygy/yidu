@@ -97,6 +97,33 @@ pub trait Provider: Send + Sync {
     async fn test_conn(&self) -> Result<u64>;
     /// 可用模型列表(OpenAI 兼容 GET /models;Ollama GET /api/tags)
     async fn list_models(&self) -> Result<Vec<String>>;
+    /// 多模态转写(v0.4 OCR「模型」引擎):图片(base64 + mime)→ 图中文字(markdown)。非流式
+    async fn transcribe_image(&self, image_b64: &str, mime: &str) -> Result<String>;
+}
+
+/// OCR 转写指令:只抄写,不翻译不解释(翻译由后续管线做)
+pub const TRANSCRIBE_PROMPT: &str = "Transcribe all text in this image exactly as written, in natural reading order. \
+Output only the transcription as Markdown: keep headings, lists, tables and code blocks where they are evident, \
+and separate paragraphs with a blank line. Do not translate, summarize, explain or add anything. \
+If the image contains no text, output nothing.";
+
+/// 模型偶尔把整段转写包进 ```markdown 围栏:剥掉最外层
+pub fn strip_outer_fence(s: &str) -> String {
+    let t = s.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        if let Some(body_end) = rest.rfind("```") {
+            let inner = &rest[..body_end];
+            if !inner.contains("```") {
+                if let Some(nl) = inner.find('\n') {
+                    let lang = inner[..nl].trim();
+                    if lang.is_empty() || lang.eq_ignore_ascii_case("markdown") || lang.eq_ignore_ascii_case("md") || lang.eq_ignore_ascii_case("text") {
+                        return inner[nl + 1..].trim().to_string();
+                    }
+                }
+            }
+        }
+    }
+    t.to_string()
 }
 
 pub fn shared_client() -> &'static reqwest::Client {
@@ -297,6 +324,16 @@ mod tests {
         // 前缀稳定:历史追加一轮后,前面的消息逐字不变 → 服务商前缀缓存可命中
         let m2 = chat_messages("sys", &[h[0].clone()], "u2");
         assert_eq!(m.as_array().unwrap()[0..3], m2.as_array().unwrap()[0..3]);
+    }
+
+    #[test]
+    fn strip_outer_fence_only_unwraps_whole_markdown_fence() {
+        assert_eq!(strip_outer_fence("```markdown\n# Title\n\nBody\n```"), "# Title\n\nBody");
+        assert_eq!(strip_outer_fence("```\nplain\n```"), "plain");
+        // 真正的代码块(带语言)与内含围栏的文本保持原样
+        assert_eq!(strip_outer_fence("```rust\nfn main() {}\n```"), "```rust\nfn main() {}\n```");
+        assert_eq!(strip_outer_fence("Intro\n```\ncode\n```"), "Intro\n```\ncode\n```");
+        assert_eq!(strip_outer_fence("  hello  "), "hello");
     }
 
     #[test]

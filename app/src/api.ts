@@ -1,6 +1,6 @@
 // Tauri command 封装:全部走 Rust,流式经 Channel
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Article, Block, HotkeyStatus, Prefs, Provider, ProviderForm, StreamEvent, TestResult, UsageSummary } from "./types";
+import type { Article, Block, HotkeyMap, OcrOutput, PermissionStatus, Prefs, Provider, ProviderForm, StreamEvent, TestResult, UsageSummary } from "./types";
 
 export function listArticles(query = ""): Promise<Article[]> {
   return invoke<Article[]>("list_articles", { query });
@@ -19,7 +19,7 @@ export function deleteArticle(id: number): Promise<void> {
 }
 
 export function translate(
-  request: { text: string; article_id?: number | null; direction: string; kind: string; format?: "auto" | "md" | "plain" },
+  request: { text: string; article_id?: number | null; direction: string; kind: string; format?: "auto" | "md" | "plain"; ephemeral?: boolean },
   onEvent: (e: StreamEvent) => void,
 ): Promise<number> {
   const ch = new Channel<StreamEvent>();
@@ -95,8 +95,33 @@ export function setPrefs(update: Partial<Prefs>): Promise<Prefs> {
   return invoke<Prefs>("set_prefs", { update });
 }
 
-export function hotkeyStatus(): Promise<HotkeyStatus> {
-  return invoke<HotkeyStatus>("hotkey_status");
+/** 各动作的热键注册状态(变化时另有 `hotkey-status` 事件,载荷同形) */
+export function hotkeyStatus(): Promise<HotkeyMap> {
+  return invoke<HotkeyMap>("hotkey_status");
+}
+
+/** 热键触发的临时翻译「存入文章库」 */
+export function articleKeep(id: number): Promise<void> {
+  return invoke("article_keep", { id });
+}
+
+/** 图片 → 文字(raw body,不走 base64);识别不到文字时 text 为空串 */
+export function ocrImage(bytes: Uint8Array, mime: string): Promise<OcrOutput> {
+  return invoke<OcrOutput>("ocr_image", bytes, { headers: { "content-type": mime || "application/octet-stream" } });
+}
+
+export function permissionStatus(): Promise<PermissionStatus> {
+  return invoke<PermissionStatus>("permission_status");
+}
+
+/** 触发系统授权框并打开系统设置对应面板 */
+export function permissionRequest(kind: "accessibility" | "screen"): Promise<PermissionStatus> {
+  return invoke<PermissionStatus>("permission_request", { kind });
+}
+
+/** 划词替换后半段:译完粘贴覆盖选区(front = 取词时的前台应用标识) */
+export function replaceTranslate(text: string, direction: string, front: number): Promise<void> {
+  return invoke("replace_translate", { text, direction, front });
 }
 
 /** 打开独立设置窗口(section: models | translate | quick | usage | about) */
@@ -139,6 +164,21 @@ export function vocabExamples(id: number): Promise<string[]> {
 
 export function vocabDelete(id: number): Promise<void> {
   return invoke("vocab_delete", { id });
+}
+
+// ---------- 生词复习 ----------
+
+/** 此刻可复习的张数(到期旧词 + 额度内的新词) */
+export function reviewCount(): Promise<number> {
+  return invoke<number>("review_count");
+}
+
+export function reviewDue(limit?: number): Promise<import("./types").ReviewCard[]> {
+  return invoke("review_due", { limit: limit ?? null });
+}
+
+export function reviewGrade(entryId: number, grade: import("./types").ReviewGrade): Promise<import("./types").ReviewResult> {
+  return invoke("review_grade", { entryId, grade });
 }
 
 export function glossaryList(): Promise<import("./types").GlossaryItem[]> {

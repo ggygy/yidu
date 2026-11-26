@@ -80,6 +80,28 @@ pub struct TranslateRequest {
     pub article_id: Option<i64>,
     pub direction: String,
     pub kind: String,
+    /// 热键触发(划词 / 截图 / 替换)的翻译:不进文章库列表,除非用户点「存入文章库」
+    #[serde(default)]
+    pub ephemeral: bool,
+}
+
+/// 事件出口:前端 Channel,或无界面流程(划词替换)的收集闭包
+#[derive(Clone)]
+pub struct EventSink(Arc<dyn Fn(StreamEvent) + Send + Sync>);
+
+impl EventSink {
+    pub fn channel(ch: Channel<StreamEvent>) -> Self {
+        EventSink(Arc::new(move |e| {
+            let _ = ch.send(e);
+        }))
+    }
+    pub fn func(f: impl Fn(StreamEvent) + Send + Sync + 'static) -> Self {
+        EventSink(Arc::new(f))
+    }
+    pub fn send(&self, e: StreamEvent) -> Result<(), ()> {
+        (self.0)(e);
+        Ok(())
+    }
 }
 
 pub struct AppState {
@@ -88,13 +110,73 @@ pub struct AppState {
     pub counter: std::sync::atomic::AtomicU64,
 }
 
-pub async fn run(app: tauri::AppHandle, req: TranslateRequest, channel: Channel<StreamEvent>, session: u64) {
+pub async fn run(app: tauri::AppHandle, req: TranslateRequest, channel: EventSink, session: u64) {
     if let Err(e) = run_inner(&app, &req, &channel, session).await {
         let _ = channel.send(StreamEvent::Error { message: e.to_string() });
     }
 }
 
-async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Channel<StreamEvent>, session: u64) -> Result<()> {
+/// 无界面翻译(划词替换):同一条管线(术语 / 校验修复都在),跑完把各块译文按原文分隔拼回。
+/// 文章只是管线的落脚处,用完即删。会话被新翻译顶替 / 有块没译完 → Err。
+pub async fn translate_to_text(app: &tauri::AppHandle, text: String, direction: String, session: u64) -> Result<String> {
+    let created: Arc<std::sync::Mutex<Option<i64>>> = Default::default();
+    let failed: Arc<std::sync::Mutex<Option<String>>> = Default::default();
+    let sink = {
+        let (created, failed) = (created.clone(), failed.clone());
+        EventSink::func(move |e| match e {
+            StreamEvent::Created { article_id, .. } => *created.lock().unwrap() = Some(article_id),
+            StreamEvent::Error { message } => *failed.lock().unwrap() = Some(message),
+            _ => {}
+        })
+    };
+    let req = TranslateRequest { format: None, text, article_id: None, direction, kind: "replace".into(), ephemeral: true };
+    let outcome = run_inner(app, &req, &sink, session).await;
+    let state = app.state::<AppState>();
+    let article_id = *created.lock().unwrap();
+    let result = (|| {
+        outcome?;
+        if let Some(msg) = failed.lock().unwrap().take() {
+            return Err(anyhow!(msg));
+        }
+        if state.active.load(Ordering::SeqCst) != session {
+            return Err(anyhow!("已取消"));
+        }
+        let id = article_id.ok_or_else(|| anyhow!("没有可翻译的内容"))?;
+        let (article, blocks) = state.db.get_article(id)?;
+        if blocks.iter().any(|b| b.status != "done") {
+            return Err(anyhow!("翻译未完成"));
+        }
+        Ok(joined_translation(&article.kind, &blocks))
+    })();
+    if let Some(id) = article_id {
+        let _ = state.db.delete_article(id);
+    }
+    result
+}
+
+/// 各块译文按原文分隔拼回整篇(同前端 blocks.ts 的 toMarkdown + plainCopy):
+/// 纯文本文章去掉行尾硬换行 `\` 与行首转义,其余给 Markdown
+pub fn joined_translation(article_kind: &str, blocks: &[BlockRow]) -> String {
+    let mut md = String::new();
+    for (i, b) in blocks.iter().enumerate() {
+        if i > 0 {
+            md.push_str(if b.sep.is_empty() { "\n\n" } else { &b.sep });
+        }
+        md.push_str(if b.trans.is_empty() { &b.src } else { &b.trans });
+    }
+    let md = md.trim().to_string();
+    if article_kind != "plain" {
+        return md;
+    }
+    let re = |p: &str| regex::Regex::new(p).expect("内置正则");
+    let s = md.replace("\\\n", "\n");
+    let s = re(r"(?m)\\$").replace_all(&s, "");
+    let s = re(r"(?m)^(\s*)\\([#>+*-])").replace_all(&s, "$1$2");
+    let s = re(r"(?m)^(\s*)(\d+)\\([.)])").replace_all(&s, "$1$2$3");
+    s.into_owned()
+}
+
+async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &EventSink, session: u64) -> Result<()> {
     let state = app.state::<AppState>();
     let db = state.db.clone();
     let cancelled: CancelCheck = {
@@ -145,7 +227,7 @@ async fn run_inner(app: &tauri::AppHandle, req: &TranslateRequest, channel: &Cha
             let title = blocks::derive_title(&text);
             // 纯文本文章记为 kind=plain:翻译时允许模型还原明显结构、复制时去掉 md 转义
             let kind = if plain { "plain" } else { req.kind.as_str() };
-            db.create_article_with_blocks(&title, kind, &req.direction, &parsed)?
+            db.create_article_with_blocks(&title, kind, &req.direction, &parsed, req.ephemeral)?
         }
     };
     let (article, all_blocks) = db.get_article(article_id)?;
@@ -302,7 +384,7 @@ struct BatchCtx<'a> {
     system: String,
     /// 纯文本文章:结构签名只比 URL 与行内码(允许模型还原列表 / 标题)
     plain: bool,
-    channel: &'a Channel<StreamEvent>,
+    channel: &'a EventSink,
     cancel: CancelCheck,
     /// 译后自动替换规则(工单 06:程序校验替换 + chip 标记)
     term_rules: Vec<(regex::Regex, String, String)>,
@@ -983,6 +1065,19 @@ fn resolve_usage(stats: &StreamStats, prompt_est: i64, raw: &str) -> ResolvedUsa
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn joined_translation_restores_plain_text() {
+        let blk = |trans: &str, src: &str, sep: &str| BlockRow {
+            idx: 0, kind: "paragraph".into(), src: src.into(), trans: trans.into(), status: "done".into(),
+            terms: String::new(), group: None, sep: sep.into(), format_warn: String::new(),
+        };
+        // 纯文本:行尾硬换行 `\\` 与行首转义去掉;未译块回落原文;块间用原文分隔
+        let blocks = vec![blk("第一行\\\n第二行", "a", ""), blk("\\# 不是标题", "b", "\n\n"), blk("1\\. 不是列表", "c", "\n"), blk("", "原样", "")];
+        assert_eq!(super::joined_translation("plain", &blocks), "第一行\n第二行\n\n# 不是标题\n1. 不是列表\n\n原样");
+        // Markdown 文章原样拼回
+        assert_eq!(super::joined_translation("paste", &blocks[..2]), "第一行\\\n第二行\n\n\\# 不是标题");
+    }
+
     use super::*;
 
     fn rules(pairs: &[(&str, &str)]) -> Vec<(regex::Regex, String, String)> {
